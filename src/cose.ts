@@ -39,8 +39,17 @@ interface RsaCoseKey extends CoseKey {
     '-2': Uint8Array;
 }
 
-function toBase64Url(array: Uint8Array): string {
-    return btoa(String.fromCharCode(...array)).replace(/+/g, '-').replace(/\//g, '_');
+export function toBase64Url(array: Uint8Array | ArrayBuffer | ArrayBufferView): string {
+    let u8array: Uint8Array;
+    if (array instanceof Uint8Array) {
+        u8array = array;
+    } else if (array instanceof ArrayBuffer) {
+        u8array = new Uint8Array(array);
+    } else {
+        u8array = new Uint8Array(array.buffer);
+    }
+
+    return btoa(String.fromCharCode(...u8array)).replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 function isEcdsaCoseKey(key: CoseKey): key is EcdsaCoseKey {

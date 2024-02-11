@@ -21,7 +21,7 @@ function isMatchableAPriori(_options: CredentialRequestOptions) {
     return false;
 }
 
-export function credentialsCreate(options: CredentialCreationOptions) {
+export function credentialsCreate(options: CredentialCreationOptions): Promise<Credential | null> {
     // https://www.w3.org/TR/credential-management-1/#dom-credentialscontainer-create
     // https://www.w3.org/TR/credential-management-1/#algorithm-create
 
@@ -48,10 +48,10 @@ export function credentialsCreate(options: CredentialCreationOptions) {
     const origin = window.origin;
 
     // Step 8, 10 and 11.
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         try {
             // Step 10.1
-            const r = internalCreate(origin, options, sameOriginWithAncestors);
+            const r = await internalCreate(origin, options, sameOriginWithAncestors);
 
             // Step 10.3
             if (r === null || r instanceof Credential) {
@@ -99,7 +99,7 @@ function credentialsCollect(origin: string, options: CredentialRequestOptions, s
     return possibleMatches;
 }
 
-export function credentialsGet(options: CredentialRequestOptions) {
+export function credentialsGet(options: CredentialRequestOptions): Promise<Credential | null> {
     // https://www.w3.org/TR/credential-management-1/#dom-credentialscontainer-get
     // https://www.w3.org/TR/credential-management-1/#abstract-opdef-request-a-credential
 
@@ -118,7 +118,7 @@ export function credentialsGet(options: CredentialRequestOptions) {
     const sameOriginWithAncestors = isSameOriginWithAncestors();
 
     // Steps 4, 7 and 8
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         // Step 7.1
         let credentials: Credential[];
         try {
@@ -134,7 +134,7 @@ export function credentialsGet(options: CredentialRequestOptions) {
             && !requiresUserMediation(origin)
             && isMatchableAPriori(options)
             && options.mediation !== 'required') {
-            resolve(credentials[0]);
+            resolve(credentials[0]!);
             return;
         }
 
@@ -149,8 +149,12 @@ export function credentialsGet(options: CredentialRequestOptions) {
 
         // Step 7.8 and 7.9
         try {
-            const result = internalDiscoverFromCredentialStore(origin, options, sameOriginWithAncestors);
-            resolve(result);
+            const result = await internalDiscoverFromCredentialStore(origin, options, sameOriginWithAncestors);
+            if (result === null) {
+                resolve(null);
+            } else {
+                resolve(result(globalThis));
+            }
         } catch (result) {
             reject(result);
         }

@@ -8,7 +8,7 @@ export type DecodedValue = bigint | Uint8Array | string | DecodedValue[] | Map<D
 
 const CBOR_TYPE_UNSIGNED_INT = 0;
 const CBOR_TYPE_NEGATIVE_INT = 1;
-const CBOR_TYPE_BYTE_STRING = 2;
+export const CBOR_TYPE_BYTE_STRING = 2;
 const CBOR_TYPE_TEXT_STRING = 3;
 const CBOR_TYPE_ARRAY = 4;
 const CBOR_TYPE_MAP = 5;
@@ -331,7 +331,7 @@ export function parseCBOR(buffer: Uint8Array): DecodedValue[] {
 
 export function parseAttestationObject(attestationObject: Uint8Array) {
     const items = parseCBOR(attestationObject);
-    strictEqual(items.length, 1, 'Only expected a single CBOR data item in the attestation object');
+    strictEqual(items.length, 1, 'Expected a single CBOR data item in the attestation object');
 
     const decoded = items[0];
     assert(decoded instanceof Map, 'Expected attestation object CBOR to hold a map');

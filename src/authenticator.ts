@@ -3,15 +3,22 @@ export type CredTypesAndPubKeyAlg = {
     alg: COSEAlgorithmIdentifier;
 };
 
+export type AuthenticatorAssertion = {
+    credentialId: ArrayBuffer;
+    authenticatorData: ArrayBuffer;
+    signature: ArrayBuffer;
+    userHandle: ArrayBuffer | null;
+}
+
 export function lookupCredentialById(
-credentialId: ArrayBuffer
+    credentialId: ArrayBuffer
 ) {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-lookup-credsource-by-credid
     console.log('Called lookupCredentialById');
 }
 
 export function authenticatorMakeCredential(
-    hash: Uint8Array,
+    hash: ArrayBuffer,
     rpEntity: PublicKeyCredentialRpEntity,
     userEntity: PublicKeyCredentialUserEntity,
     requireResidentKey: boolean,
@@ -20,21 +27,28 @@ export function authenticatorMakeCredential(
     enterpriseAttestationPossible: boolean,
     extensions: Map<unknown, unknown>,
     excludeCredentialDescriptorList?: PublicKeyCredentialDescriptor[],
-) {
+): ArrayBuffer {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-make-cred
     console.log('Called authenticatorMakeCredential');
+    return new ArrayBuffer(0);
 }
 
 export function authenticatorGetAssertion(
     rpId: string,
-    hash: Uint8Array,
+    hash: ArrayBuffer,
     requireUserVerification: boolean,
     extensions: Map<unknown, unknown>,
     allowCredentialDescriptorList?: PublicKeyCredentialDescriptor[]
-) {
+): AuthenticatorAssertion {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-get-assertion
     console.log('Called authenticatorGetAssertion');
 
+    return {
+        credentialId: new ArrayBuffer(0),
+        authenticatorData: new ArrayBuffer(0),
+        signature: new ArrayBuffer(0),
+        userHandle: null
+    };
 }
 
 export function authenticatorCancel() {
