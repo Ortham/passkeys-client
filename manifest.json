@@ -1,0 +1,27 @@
+{
+    "manifest_version": 2,
+    "name": "Borderify",
+    "version": "1.0",
+
+    "description": "Implements WebAuthn/passkey client functionality.",
+
+    "content_scripts": [
+      {
+        "matches": [
+            "http://localhost/*",
+            "https://*/*"
+        ],
+        "js": ["build/bundle.js"],
+        "all_frames": true,
+        "run_at": "document_start"
+      }
+    ],
+
+    "web_accessible_resources": ["build/bundle.js"],
+
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "client@passkeys.ortham.net"
+        }
+    }
+  }

@@ -1,0 +1,19 @@
+{
+  "name": "passkeys-client",
+  "version": "1.0.0",
+  "description": "",
+  "main": "borderify.js",
+  "type": "module",
+  "scripts": {
+    "build": "npx tsc && npx esbuild build/inject.js --bundle --outfile=build/bundle.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/firefox-webext-browser": "^120.0.0",
+    "@types/webextension-polyfill": "^0.10.7",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}
