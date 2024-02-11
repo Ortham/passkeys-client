@@ -1,9 +1,11 @@
+import { assert } from "./assert";
 import { isSelfAttestationUsed, parseAuthData, replaceIdentifyingInfo } from "./authData";
-import { CredTypesAndPubKeyAlg, authenticatorGetAssertion, authenticatorMakeCredential } from "./authenticator";
+import { AuthenticatorAssertion, CredTypesAndPubKeyAlg, InvalidStateError, UserCancelledError, authenticatorCancel, authenticatorGetAssertion, authenticatorMakeCredential, lookupCredentialById } from "./authenticator";
 import { parseAttestationObject } from "./cbor";
 import { toBase64Url } from "./cose";
 import { getEffectiveDomain, isRegistrableDomainSuffix } from "./domain";
 
+const ALLOWED_CREDENTIAL_TYPE = 'public-key';
 const AUTHENTICATOR_CAPABILITIES = {
     // It's not clear to me if a software authenticator counts as a platform or cross-platform authenticator, but platform is probably a better fit as it's not necessarily cross-platform.
     attachment: 'platform',
@@ -26,6 +28,24 @@ function validateAttestation(attestation: string | undefined): AttestationConvey
     return 'none';
 }
 
+function clamp(value: number, min: number, max: number) {
+    return Math.max(Math.min(value, max), min);
+}
+
+function getTimeout(options: PublicKeyCredentialCreationOptions) {
+    if (options.authenticatorSelection?.userVerification === 'discouraged') {
+        return options.timeout ? clamp(options.timeout, 30_000, 180_000) : 120_000;
+    } else {
+        return options.timeout ? clamp(options.timeout, 30_000, 600_000) : 300_000;
+    }
+}
+
+function startTimer(timeout: number) {
+    return new Promise((resolve, _reject) => {
+        setTimeout(resolve, timeout);
+    });
+}
+
 async function validateRpId(rpId: string | undefined, effectiveDomain: string) {
     // https://www.w3.org/TR/2019/REC-webauthn-1-20190304/#createCredential
     // Step 7
@@ -42,35 +62,28 @@ async function validateRpId(rpId: string | undefined, effectiveDomain: string) {
     return rpId;
 }
 
-function continueToTimeout() {
-    // There is no other authenticator, so this falls through to step 21.
-    // A real implementation will obviously need to wait for the timer (which needs to be passed in) to expire before throwing.
-    // FIXME: Doing this before the lifetimeTimer has expired is a privacy leak.
-    throw new DOMException('Timer expired', 'NotAllowedError');
-}
-
 function validateAuthenticatorSelection(authenticatorSelection: PublicKeyCredentialCreationOptions['authenticatorSelection']) {
     if (!authenticatorSelection) {
         return;
     }
 
     if (authenticatorSelection.authenticatorAttachment && authenticatorSelection.authenticatorAttachment !== AUTHENTICATOR_CAPABILITIES.attachment) {
-        continueToTimeout();
+        throw new Error('Authenticator attachment does not match specified value');
     }
 
     // This is a no-op included for completeness.
     if (authenticatorSelection.residentKey === 'required' && !AUTHENTICATOR_CAPABILITIES.supportsResidentKeys) {
-        continueToTimeout();
+        throw new Error('Resident key required but authenticator does not support them');
     }
 
     // This is a no-op included for completeness.
     if (authenticatorSelection.residentKey === undefined && authenticatorSelection.requireResidentKey && !AUTHENTICATOR_CAPABILITIES.supportsResidentKeys) {
-        continueToTimeout();
+        throw new Error('Resident key required but authenticator does not support them');
     }
 
     // This is a no-op included for completeness.
     if (authenticatorSelection.userVerification && !AUTHENTICATOR_CAPABILITIES.supportsUserVerification) {
-        continueToTimeout();
+        throw new Error('User verification required but authenticator does not support it');
     }
 }
 
@@ -101,16 +114,14 @@ function shouldRequireUserVerification(userVerification: UserVerificationRequire
 }
 
 function getCredTypesAndPubKeyAlgs(params: PublicKeyCredentialCreationOptions['pubKeyCredParams']): CredTypesAndPubKeyAlg[] {
-    const ALLOWED_TYPE = 'public-key';
-
     if (params.length === 0) {
         return [
             {
-                type: ALLOWED_TYPE,
+                type: ALLOWED_CREDENTIAL_TYPE,
                 alg: -7
             },
             {
-                type: ALLOWED_TYPE,
+                type: ALLOWED_CREDENTIAL_TYPE,
                 alg: -257
             }
         ];
@@ -118,7 +129,7 @@ function getCredTypesAndPubKeyAlgs(params: PublicKeyCredentialCreationOptions['p
 
     const credTypesAndPubKeyAlgs = [];
     for (const current of params) {
-        if (current.type !== ALLOWED_TYPE) {
+        if (current.type !== ALLOWED_CREDENTIAL_TYPE) {
             continue;
         }
 
@@ -145,71 +156,36 @@ function createClientDataHash(clientDataJSON: string) {
     return crypto.subtle.digest('SHA-256', new TextEncoder().encode(clientDataJSON));
 }
 
-// Although this is supposed to be synchronous, the functions it calls are async.
-export async function internalCreate(origin: string, creationOptions: CredentialCreationOptions, sameOriginWithAncestors: boolean): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
-    // https://www.w3.org/TR/credential-management-1/#algorithm-create-cred
-    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-createCredential
-    console.log('Called replacement internal [[Create]]')
+function userCancelAction(): Promise<never> {
+    return new Promise(async (_resolve, reject) => {
+        // TODO: Add the ability for the user to cancel the process.
+        const userCancelled = false;
 
-    // Step 1
-    if (!creationOptions.publicKey) {
-        throw new Error('No publicKey configuration options were provided');
-    }
+        if (userCancelled) {
+            await authenticatorCancel();
+            reject(new DOMException('User cancelled operation', 'NotAllowedError'));
+        }
+    });
+}
 
-    // Step 2
-    if (!sameOriginWithAncestors) {
-        throw new DOMException('Called cross-origin', 'NotAllowedError');
-    }
+function abortSignalAction(options: CredentialCreationOptions | CredentialRequestOptions): Promise<never> {
+    return new Promise(async (_resolve, reject) => {
+        if (options.signal && options.signal.aborted) {
+            await authenticatorCancel();
+            // In WebAuthn Level 3 this throws options.signal's abort reason.
+            reject(new DOMException('Abort signalled', 'AbortError'));
+        }
+    });
+}
 
-    // Step 3
-    const options = creationOptions.publicKey;
-
-    // TODO: Step 4 - timeout checks and timer initialisation.
-
-    // Step 5
-    if (!options.user.id || (options.user.id.byteLength < 1 || options.user.id.byteLength > 64)) {
-        throw new TypeError('user.id does not match the required length.');
-    }
-
-    // Steps 6 and 7
-    const effectiveDomain = getEffectiveDomain(origin);
-
-    // Step 8
-    options.rp.id = await validateRpId(options.rp.id, effectiveDomain);
-
-    // Steps 9
-    const credTypesAndPubKeyAlgs = getCredTypesAndPubKeyAlgs(options.pubKeyCredParams);
-
-    // Step 10
-    if (credTypesAndPubKeyAlgs.length === 0 && options.pubKeyCredParams.length !== 0) {
-        throw new DOMException('No supported algorithms were provided', 'NotSupportedError')
-    }
-
-    // Steps 11 and 12 - No client extensions are supported.
-    const clientExtensions = {};
-    // No authenticator extensions are supported.
-    const authenticatorExtensions = new Map();
-
-    // Steps 13 and 14
-    const clientDataJSON = createClientDataJSON('webauthn.create', options.challenge, sameOriginWithAncestors);
-
-    // Step 15
-    const clientDataHash = await createClientDataHash(clientDataJSON);
-
-    // Step 16
-    if (creationOptions.signal && creationOptions.signal.aborted) {
-        throw new DOMException('Abort signalled', 'AbortError');
-    }
-
-    // Steps 17 and 18 are skipped because there is only a single authenticator so they aren't relevant.
-
-    // TODO: Step 19 - start lifetimeTimer
-
-    // Step 20
-    // We only really handle the case where an authenticator becomes available.
-    // TODO: Handle other cases where relevant.
-    // FIXME: Not handling some cases may be a privacy leak.
-
+async function makeCredentialAction(
+    options: PublicKeyCredentialCreationOptions,
+    clientDataJSON: string,
+    clientDataHash: ArrayBuffer,
+    credTypesAndPubKeyAlgs: CredTypesAndPubKeyAlg[],
+    clientExtensions: Record<string, unknown>,
+    authenticatorExtensions: Map<unknown, unknown>
+): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
     // Step 20.available.2
     if (options.authenticatorSelection) {
         validateAuthenticatorSelection(options.authenticatorSelection);
@@ -235,7 +211,7 @@ export async function internalCreate(origin: string, creationOptions: Credential
     const excludeCredentialDescriptorList = options.excludeCredentials;
 
     // Step 20.available.7.3
-    const attestationObjectResult = authenticatorMakeCredential(clientDataHash, options.rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
+    const attestationObjectResult = await authenticatorMakeCredential(clientDataHash, options.rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
 
     // Step 20.success.1 is skipped because there's only one authenticator.
 
@@ -333,7 +309,109 @@ export async function internalCreate(origin: string, creationOptions: Credential
     return constructCredentialAlg;
 }
 
-export function internalCollectFromCredentialStore(_origin: string, _options: CredentialRequestOptions, _sameOriginWithAncestors: boolean): Credential[] {
+// Although this is supposed to be synchronous, the functions it calls are async.
+export async function internalCreate(
+    origin: string,
+    creationOptions: CredentialCreationOptions,
+    sameOriginWithAncestors: boolean
+): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
+    // https://www.w3.org/TR/credential-management-1/#algorithm-create-cred
+    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-createCredential
+    console.log('Called replacement internal [[Create]]')
+
+    // Step 1
+    if (!creationOptions.publicKey) {
+        throw new Error('No publicKey configuration options were provided');
+    }
+
+    // Step 2
+    if (!sameOriginWithAncestors) {
+        throw new DOMException('Called cross-origin', 'NotAllowedError');
+    }
+
+    // Step 3
+    const options = creationOptions.publicKey;
+
+    // Step 4 - timeout checks and timer initialisation.
+    const timeout = getTimeout(options);
+
+    // Step 5
+    if (!options.user.id || (options.user.id.byteLength < 1 || options.user.id.byteLength > 64)) {
+        throw new TypeError('user.id does not match the required length.');
+    }
+
+    // Steps 6 and 7
+    const effectiveDomain = getEffectiveDomain(origin);
+
+    // Step 8
+    options.rp.id = await validateRpId(options.rp.id, effectiveDomain);
+
+    // Steps 9
+    const credTypesAndPubKeyAlgs = getCredTypesAndPubKeyAlgs(options.pubKeyCredParams);
+
+    // Step 10
+    if (credTypesAndPubKeyAlgs.length === 0 && options.pubKeyCredParams.length !== 0) {
+        throw new DOMException('No supported algorithms were provided', 'NotSupportedError')
+    }
+
+    // Steps 11 and 12 - No client extensions are supported.
+    const clientExtensions = {};
+    // No authenticator extensions are supported.
+    const authenticatorExtensions = new Map();
+
+    // Steps 13 and 14
+    const clientDataJSON = createClientDataJSON('webauthn.create', options.challenge, sameOriginWithAncestors);
+
+    // Step 15
+    const clientDataHash = await createClientDataHash(clientDataJSON);
+
+    // Step 16
+    if (creationOptions.signal && creationOptions.signal.aborted) {
+        throw new DOMException('Abort signalled', 'AbortError');
+    }
+
+    // Steps 17 and 18 are skipped because there is only a single authenticator so they aren't relevant.
+
+    // Step 19
+    const lifetimeTimer = startTimer(timeout)
+        .then(() => authenticatorCancel())
+        .then(() => {
+            // Step 21
+            throw new DOMException('Timer expired', 'NotAllowedError');
+        });
+
+    // Step 20
+    // In WebAuthn Level 2, the user cancel action returns an exception without terminating the algorithm, which doesn't make sense. In Level 3, it terminates, so using that behaviour.
+    const userCancelActionPromise = userCancelAction();
+    const abortSignalActionPromise = abortSignalAction(creationOptions);
+    const makeCredentialPromise = makeCredentialAction(options, clientDataJSON, clientDataHash, credTypesAndPubKeyAlgs, clientExtensions, authenticatorExtensions)
+        .catch(err => {
+            if (err instanceof UserCancelledError) {
+                // There are no other authenticators, so no need to do anything.
+            } else if (err instanceof InvalidStateError) {
+                // There are no other authenticators to cancel.
+                throw new DOMException('Authenticator encountered an invalid state', 'InvalidStateError');
+            } else {
+                // No need to track issued requests, so nothing to do here.
+            }
+
+            // If no exception has been thrown in this catch, this should just wait until lifetimeTimer is done.
+            return lifetimeTimer;
+        });
+
+    return Promise.race([
+        lifetimeTimer,
+        userCancelActionPromise,
+        abortSignalActionPromise,
+        makeCredentialPromise
+    ]);
+}
+
+export function internalCollectFromCredentialStore(
+    _origin: string,
+    _options: CredentialRequestOptions,
+    _sameOriginWithAncestors: boolean
+): Credential[] {
     // https://www.w3.org/TR/credential-management-1/#algorithm-collect-creds
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#dom-publickeycredential-collectfromcredentialstore-slot
     // Although this is supposed to return a set of credentials, Set is pretty useless when storing objects, so just use an array instead.
@@ -341,75 +419,63 @@ export function internalCollectFromCredentialStore(_origin: string, _options: Cr
     return [];
 }
 
-// Although this is supposed to be synchronous, the functions it calls are async.
-// Also note that the Credential Management spec says this returns a Credential, but the WebAuthn spec says it returns a function that returns a Credential.
-export async function internalDiscoverFromCredentialStore(origin: string, getOptions: CredentialRequestOptions, sameOriginWithAncestors: boolean): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
-    // https://www.w3.org/TR/credential-management-1/#algorithm-discover-creds
-    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-discover-from-external-source
-    console.log('Called replacement internal [[DiscoverFromCredentialStore]]');
-
-    // Step 1
-    if (!getOptions.publicKey) {
-        throw new Error('No publicKey configuration options were provided');
-    }
-
-    // Step 2
-    const options = getOptions.publicKey;
-
-    // TODO: Step 3 - timeout checks and timer initialisation.
-
-    // Steps 4 and 5
-    const effectiveDomain = getEffectiveDomain(origin);
-
-    // Step 6
-    options.rpId = await validateRpId(options.rpId, effectiveDomain);
-
-    // Steps 7 and 8 - No client extensions are supported.
-    const clientExtensions = {};
-    // No authenticator extensions are supported.
-    const authenticatorExtensions = new Map();
-
-    // Steps 9 and 10.
-    const clientDataJSON = createClientDataJSON('webauthn.get', options.challenge, sameOriginWithAncestors);
-
-    // Step 11
-    const clientDataHash = await createClientDataHash(clientDataJSON);
-
-    // Step 12
-    if (getOptions.signal && getOptions.signal.aborted) {
-        throw new DOMException('Abort signalled', 'AbortError');
-    }
-
-    // Step 13 skipped because there is only one authenticator.
+async function getAssertionAction(
+    options: PublicKeyCredentialRequestOptions,
+    clientDataJSON: string,
+    clientDataHash: ArrayBuffer,
+    clientExtensions: Record<string, unknown>,
+    authenticatorExtensions: Map<unknown, unknown>
+): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
+    assert(options.rpId !== undefined);
 
     // Step 14
     // savedCredentialId is used instead of a savedCredentialIds map because there is only one authenticator.
-    const savedCredentialId = undefined;
-
-    // Step 15 skipped because there is only one authenticator.
-
-    // FIXME: Step 16 - not having lifetime timer is a privacy leak.
-
-    // Step 17
-    // We only really handle the case where an authenticator becomes available.
-    // TODO: Handle other cases where relevant.
-    // FIXME: Not handling some cases may be a privacy leak.
+    let savedCredentialId: PublicKeyCredentialDescriptor | undefined;
 
     // Step 17.available.1
     if (options.userVerification === 'required' && !AUTHENTICATOR_CAPABILITIES.supportsUserVerification) {
-        continueToTimeout();
+        throw new Error('User verification required but authenticator does not support it');
     }
 
     // Step 17.available.2
     const requireUserVerification = shouldRequireUserVerification(options.userVerification);
 
     // Step 17.available.3
-    let authenticatorResult;
+    let authenticatorResult: AuthenticatorAssertion;
     if (options.allowCredentials && options.allowCredentials.length > 0) {
-        // TODO: Skipped for now because there's currently no way to query the authenticator for credentials matching what's in allowCredentials.
-        throw new Error('Unsupported');
+        const allowedCredentialIds = options.allowCredentials
+            .filter(c => c.type === ALLOWED_CREDENTIAL_TYPE)
+            .map(c => c.id);
+
+        const allowCredentialDescriptorList = await lookupCredentialById(options.rpId, allowedCredentialIds);
+
+        if (allowCredentialDescriptorList.length === 0) {
+            throw new Error('Authenticator does not have any of the allowed credential IDs');
+        }
+
+        const distinctTransports = new Set();
+
+        if (allowCredentialDescriptorList.length === 1) {
+            savedCredentialId = allowCredentialDescriptorList[0];
+        }
+
+        for (const descriptor of allowCredentialDescriptorList) {
+            if (descriptor.transports !== undefined) {
+                for (const transport of descriptor.transports) {
+                    distinctTransports.add(transport);
+                }
+            }
+        }
+
+        if (distinctTransports.size > 0) {
+            // There's only one transport available to use.
+            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
+        } else {
+            // There's only one transport available to use.
+            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
+        }
     } else {
-        authenticatorResult = authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions)
+        authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
     }
 
     // Step 17.available.4 skipped
@@ -418,7 +484,7 @@ export async function internalDiscoverFromCredentialStore(origin: string, getOpt
 
     // Step 17.success.2
     const assertionCreationData = {
-        credentialIdResult: savedCredentialId ?? authenticatorResult.credentialId,
+        credentialIdResult: savedCredentialId?.id ?? authenticatorResult.credentialId,
         clientDataJSONResult: clientDataJSON,
         authenticatorDataResult: authenticatorResult.authenticatorData,
         signatureResult: authenticatorResult.signature,
@@ -450,7 +516,9 @@ export async function internalDiscoverFromCredentialStore(origin: string, getOpt
             }
         });
 
-        const id = new global.Uint8Array(assertionCreationData.credentialIdResult);
+        const id = assertionCreationData.credentialIdResult instanceof ArrayBuffer
+            ? new global.Uint8Array(assertionCreationData.credentialIdResult)
+            : new global.Uint8Array(assertionCreationData.credentialIdResult.buffer);
 
         // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
         const clientExtensionResults = global.JSON.parse(global.JSON.stringify(assertionCreationData.clientExtensionResults));
@@ -480,6 +548,88 @@ export async function internalDiscoverFromCredentialStore(origin: string, getOpt
 
     // Step 17.success.5
     return constructAssertionAlg;
+}
+
+// Although this is supposed to be synchronous, the functions it calls are async.
+// Also note that the Credential Management spec says this returns a Credential, but the WebAuthn spec says it returns a function that returns a Credential.
+export async function internalDiscoverFromCredentialStore(
+    origin: string,
+    getOptions: CredentialRequestOptions,
+    sameOriginWithAncestors: boolean
+): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
+    // https://www.w3.org/TR/credential-management-1/#algorithm-discover-creds
+    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-discover-from-external-source
+    console.log('Called replacement internal [[DiscoverFromCredentialStore]]');
+
+    // Step 1
+    if (!getOptions.publicKey) {
+        throw new Error('No publicKey configuration options were provided');
+    }
+
+    // Step 2
+    const options = getOptions.publicKey;
+
+    // Step 3
+    const timeout = options.timeout !== undefined ? clamp(options.timeout, 300_000, 600_000) : 300_000;
+
+    // Steps 4 and 5
+    const effectiveDomain = getEffectiveDomain(origin);
+
+    // Step 6
+    options.rpId = await validateRpId(options.rpId, effectiveDomain);
+
+    // Steps 7 and 8 - No client extensions are supported.
+    const clientExtensions = {};
+    // No authenticator extensions are supported.
+    const authenticatorExtensions = new Map();
+
+    // Steps 9 and 10.
+    const clientDataJSON = createClientDataJSON('webauthn.get', options.challenge, sameOriginWithAncestors);
+
+    // Step 11
+    const clientDataHash = await createClientDataHash(clientDataJSON);
+
+    // Step 12
+    if (getOptions.signal && getOptions.signal.aborted) {
+        throw new DOMException('Abort signalled', 'AbortError');
+    }
+
+    // Step 13 skipped because there is only one authenticator.
+
+    // Step 14 is skipped because the variable is initialised inside getAssertionAction()
+
+    // Step 15 skipped because there is only one authenticator.
+
+    // Step 16
+    const lifetimeTimer = startTimer(timeout)
+        .then(() => authenticatorCancel())
+        .then(() => {
+            // Step 18
+            throw new DOMException('Timer expired', 'NotAllowedError');
+        });
+
+    // Step 17
+    // In WebAuthn Level 2, the user cancel action returns an exception without terminating the algorithm, which doesn't make sense. In Level 3, it terminates, so using that behaviour.
+    const userCancelActionPromise = userCancelAction();
+    const abortSignalActionPromise = abortSignalAction(getOptions);
+    const getAssertionPromise = getAssertionAction(options, clientDataJSON, clientDataHash,  clientExtensions, authenticatorExtensions)
+        .catch(err => {
+            if (err instanceof UserCancelledError) {
+                // There are no other authenticators, so no need to do anything.
+            } else {
+                // No need to track issued requests, so nothing to do here.
+            }
+
+            // If no exception has been thrown in this catch, this should just wait until lifetimeTimer is done.
+            return lifetimeTimer;
+        });
+
+    return Promise.race([
+        lifetimeTimer,
+        userCancelActionPromise,
+        abortSignalActionPromise,
+        getAssertionPromise
+    ]);
 }
 
 export function internalStore(_credential: PublicKeyCredential, _sameOriginWithAncestors: boolean) {

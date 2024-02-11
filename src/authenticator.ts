@@ -10,14 +10,24 @@ export type AuthenticatorAssertion = {
     userHandle: ArrayBuffer | null;
 }
 
-export function lookupCredentialById(
-    credentialId: ArrayBuffer
-) {
-    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-lookup-credsource-by-credid
-    console.log('Called lookupCredentialById');
+export class UserCancelledError extends Error {
+
 }
 
-export function authenticatorMakeCredential(
+export class InvalidStateError extends Error {
+
+}
+
+export async function lookupCredentialById(
+    rpId: string,
+    allowedCredentialIds: BufferSource[]
+): Promise<PublicKeyCredentialDescriptor[]> {
+    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-lookup-credsource-by-credid
+    console.log('Called lookupCredentialById');
+    return [];
+}
+
+export async function authenticatorMakeCredential(
     hash: ArrayBuffer,
     rpEntity: PublicKeyCredentialRpEntity,
     userEntity: PublicKeyCredentialUserEntity,
@@ -27,19 +37,19 @@ export function authenticatorMakeCredential(
     enterpriseAttestationPossible: boolean,
     extensions: Map<unknown, unknown>,
     excludeCredentialDescriptorList?: PublicKeyCredentialDescriptor[],
-): ArrayBuffer {
+): Promise<ArrayBuffer> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-make-cred
     console.log('Called authenticatorMakeCredential');
     return new ArrayBuffer(0);
 }
 
-export function authenticatorGetAssertion(
+export async function authenticatorGetAssertion(
     rpId: string,
     hash: ArrayBuffer,
     requireUserVerification: boolean,
     extensions: Map<unknown, unknown>,
     allowCredentialDescriptorList?: PublicKeyCredentialDescriptor[]
-): AuthenticatorAssertion {
+): Promise<AuthenticatorAssertion> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-get-assertion
     console.log('Called authenticatorGetAssertion');
 
@@ -51,7 +61,7 @@ export function authenticatorGetAssertion(
     };
 }
 
-export function authenticatorCancel() {
+export async function authenticatorCancel() {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-cancel
     console.log('Called authenticatorCancel');
 }
