@@ -63,6 +63,7 @@ export function credentialsCreate(options: CredentialCreationOptions): Promise<C
                 resolve(r(global));
             }
         } catch(r) {
+            console.error('Caught error while running internalCreate', r);
             // Step 10.2
             reject(r);
         }
@@ -91,6 +92,7 @@ function credentialsCollect(origin: string, options: CredentialRequestOptions, s
         // Step 2.4
         possibleMatches.push(...r);
     } catch (r) {
+        console.error('Caught error while running internalCollectFromCredentialStore', r);
         // Step 2.2 - throw instead of return so that we don't need to check if the return value is an error or not.
         throw r;
     }
@@ -124,6 +126,7 @@ export function credentialsGet(options: CredentialRequestOptions): Promise<Crede
         try {
             credentials = credentialsCollect(origin, options, sameOriginWithAncestors);
         } catch (credentials) {
+            console.error('Caught error while running credentialsCollect', credentials);
             // Step 7.2
             reject(credentials);
             return;
@@ -156,6 +159,7 @@ export function credentialsGet(options: CredentialRequestOptions): Promise<Crede
                 resolve(result(globalThis));
             }
         } catch (result) {
+            console.error('Caught error while running internalDiscoverFromCredentialStore', result);
             reject(result);
         }
     });

@@ -339,6 +339,7 @@ export async function authenticatorMakeCredential(
         // Step 7.4.3 and 7.4.4
         await storeCredential(credentialSource);
     } catch (err) {
+        console.error('Caught error while creating credential', err);
         // Step 8
         throw new UnknownError('Error occurred while creating credential');
     }
@@ -432,8 +433,8 @@ export async function authenticatorGetAssertion(
     try {
         signature = await generateSignature(selectedCredential.privateKey, authenticatorData, hash);
     } catch (err) {
+        console.error('Caught error while generating signature', err);
         // Step 12
-        console.log('Caught error', err);
         throw new UnknownError('Error occurred while generating signature');
     }
 

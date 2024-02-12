@@ -389,6 +389,7 @@ export async function internalCreate(
     const abortSignalActionPromise = abortSignalAction(creationOptions);
     const makeCredentialPromise = makeCredentialAction(options, clientDataJSON, clientDataHash, credTypesAndPubKeyAlgs, clientExtensions, authenticatorExtensions)
         .catch(err => {
+            console.error('Caught error while running makeCredentialAction', err);
             if (err instanceof UserCancelledError) {
                 // There are no other authenticators, so no need to do anything.
             } else if (err instanceof InvalidStateError) {
@@ -616,6 +617,7 @@ export async function internalDiscoverFromCredentialStore(
     const abortSignalActionPromise = abortSignalAction(getOptions);
     const getAssertionPromise = getAssertionAction(options, clientDataJSON, clientDataHash,  clientExtensions, authenticatorExtensions)
         .catch(err => {
+            console.error('Caught error while running getAssertionAction', err);
             if (err instanceof UserCancelledError) {
                 // There are no other authenticators, so no need to do anything.
             } else {
