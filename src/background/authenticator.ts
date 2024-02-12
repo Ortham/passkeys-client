@@ -4,17 +4,8 @@ import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
 import { concatArrays, encodeMap } from "../cbor/encode";
 import { COSE_ALG_ES256, COSE_ALG_RS256, jwkToCose } from "../cose";
 import { createHash, getArrayBuffer, getRandomBytes } from "../util";
+import { PublicKeyCredentialSource, getAllStoredCredentials, getStoredCredentials, incrementSignatureCounter, storeCredential } from "./store";
 
-type PublicKeyCredentialSource = {
-    type: 'public-key';
-    id: ArrayBuffer;
-    privateKey: JsonWebKey;
-    rpId: string;
-    userHandle: ArrayBuffer | null;
-    otherUI: {
-        signatureCounter: number;
-    };
-};
 
 export class UserCancelledError extends Error {}
 
@@ -28,8 +19,6 @@ export class NotAllowedError extends Error {}
 
 export class ConstraintError extends Error {}
 
-// Keys are RP IDs.
-const CREDENTIALS_MAP = new Map<string, PublicKeyCredentialSource[]>();
 const ALLOWED_CREDENTIAL_TYPE = 'public-key';
 const AUTHENTICATOR_CAPABILITIES = {
     // It's not clear to me if a software authenticator counts as a platform or cross-platform authenticator, but platform is probably a better fit as it's not necessarily cross-platform.
@@ -56,9 +45,9 @@ function areBuffersEqual(buffer1: BufferSource, buffer2: BufferSource) {
     return true;
 }
 
-function lookupCredentialById(
+async function lookupCredentialById(
     credentialId: BufferSource
-): PublicKeyCredentialSource | null {
+): Promise<PublicKeyCredentialSource | null> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-lookup-credsource-by-credid
     console.log('Called lookupCredentialById');
 
@@ -68,11 +57,10 @@ function lookupCredentialById(
     }
 
     // Step 2
-    for (const credentials of CREDENTIALS_MAP.values()) {
-        const credential = credentials.find(c => areBuffersEqual(credentialId, c.id));
-        if (credential !== undefined) {
-            return credential;
-        }
+    const credentials = await getAllStoredCredentials();
+    const credential = credentials.find(c => areBuffersEqual(credentialId, c.id));
+    if (credential !== undefined) {
+        return credential;
     }
 
     // Step 3
@@ -135,8 +123,8 @@ function generateFlags(
 }
 
 function generateAuthenticatorData(rpIdHash: ArrayBuffer, flags: number, signCount: number, attestedCredentialData: Uint8Array | undefined, extensions: Record<string, unknown>): Uint8Array {
-    const signCountArray = new Uint32Array(1);
-    signCountArray[0] = signCount;
+    const signCountArray = new ArrayBuffer(4);
+    new DataView(signCountArray).setUint32(0, signCount, false);
 
     const extensionsMap = new Map(Object.entries(extensions));
     const extensionsArray = extensionsMap.size === 0
@@ -147,7 +135,7 @@ function generateAuthenticatorData(rpIdHash: ArrayBuffer, flags: number, signCou
         return concatArrays(
             new Uint8Array(rpIdHash),
             new Uint8Array([flags]),
-            new Uint8Array(signCountArray.buffer),
+            new Uint8Array(signCountArray),
             attestedCredentialData,
             extensionsArray
         );
@@ -199,7 +187,34 @@ async function generateSignature(
 
     const key = await crypto.subtle.importKey('jwk', privateKey, getImportAlgorithm(privateKey), false, ['sign']);
 
-    return crypto.subtle.sign(getSigningAlgorithm(privateKey), key, dataToSign);
+    const signature = await crypto.subtle.sign(getSigningAlgorithm(privateKey), key, dataToSign);
+
+    if (privateKey.kty !== 'EC') {
+        return signature;
+    }
+
+    // ECDSA signatures need to be DER-encoded.
+
+    assert(signature.byteLength % 2 === 0);
+    assert(signature.byteLength < 256);
+    const numberLength = signature.byteLength / 2;
+
+    const r = signature.slice(0, numberLength);
+    const s = signature.slice(numberLength);
+
+    const DER_TAG_SEQUENCE = 0x30;
+    const DER_TAG_INTEGER = 0x02;
+
+    // Plus 2 bytes each for the integer tag and length bytes.
+    const sequenceLength = signature.byteLength + 4;
+
+    return concatArrays(
+        new Uint8Array([DER_TAG_SEQUENCE, sequenceLength]),
+        new Uint8Array([DER_TAG_INTEGER, numberLength]),
+        new Uint8Array(r),
+        new Uint8Array([DER_TAG_INTEGER, numberLength]),
+        new Uint8Array(s)
+    );
 }
 
 export async function lookupCredentialsById(
@@ -209,7 +224,7 @@ export async function lookupCredentialsById(
     console.log('Called lookupCredentialsById');
 
     // Match with rpId
-    const credentials = CREDENTIALS_MAP.get(rpId)?.slice() ?? [];
+    const credentials = (await getStoredCredentials(rpId)).slice();
     if (credentials.length === 0) {
         return Promise.resolve([]);
     }
@@ -262,7 +277,7 @@ export async function authenticatorMakeCredential(
     // Step 3
     if (excludeCredentialDescriptorList !== undefined) {
         for (const descriptor of excludeCredentialDescriptorList) {
-            const credential = lookupCredentialById(descriptor.id);
+            const credential = await lookupCredentialById(descriptor.id);
             if (credential !== null && credential.rpId === rpEntity.id && credential.type === descriptor.type) {
                 // TODO: Confirm user consent.
                 const userConsented = false;
@@ -322,12 +337,7 @@ export async function authenticatorMakeCredential(
         };
 
         // Step 7.4.3 and 7.4.4
-        const credentials = CREDENTIALS_MAP.get(rpEntity.id);
-        if (credentials === undefined) {
-            CREDENTIALS_MAP.set(rpEntity.id, [credentialSource]);
-        } else {
-            credentials.push(credentialSource);
-        }
+        await storeCredential(credentialSource);
     } catch (err) {
         // Step 8
         throw new UnknownError('Error occurred while creating credential');
@@ -371,21 +381,20 @@ export async function authenticatorGetAssertion(
 
     // Step 2
     // Using an array instead of a set because sets of objects aren't useful.
-    let credentialOptions = []
+    let credentialOptions: PublicKeyCredentialSource[] = []
 
     if (allowCredentialDescriptorList !== undefined) {
         // Step 3
         for (const descriptor of allowCredentialDescriptorList) {
-            const credential = lookupCredentialById(descriptor.id);
+            const credential = await lookupCredentialById(descriptor.id);
             if (credential !== null) {
                 credentialOptions.push(credential);
             }
         }
     } else {
         // Step 4
-        for (const credentials of CREDENTIALS_MAP.values()) {
-            credentialOptions.push(...credentials)
-        }
+        const credentials = await getAllStoredCredentials();
+        credentialOptions.push(...credentials);
     }
 
     // Step 5
@@ -411,7 +420,7 @@ export async function authenticatorGetAssertion(
 
     // Step 9
     // This is all that's required because selectedCredential is a reference to the in-memory stored data.
-    selectedCredential.otherUI.signatureCounter += 1;
+    await incrementSignatureCounter(selectedCredential.id);
 
     // Step 10
     const rpIdHash = await createHash(rpId);
