@@ -1,4 +1,4 @@
-import { toBase64Url } from "./cose";
+import { getRandomBytes, toBase64Url } from "./util";
 
 function isValidIPv4AddressString(hostname: string) {
     // https://url.spec.whatwg.org/#valid-ipv4-address-string
@@ -119,11 +119,6 @@ export function getEffectiveDomain(origin: string) {
         throw new DOMException('Effective domain is not a valid domain', 'SecurityError');
     }
 
-}
-
-function getRandomBytes(count: number) {
-    const array = new Uint8Array(count);
-    return crypto.getRandomValues(array);
 }
 
 function getPublicSuffixUsingList(hostname: string): string {

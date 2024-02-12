@@ -1,5 +1,6 @@
 import { assert } from "./assert";
-import { CBOR_TYPE_BYTE_STRING, parseCBOR } from "./cbor";
+import { CBOR_TYPE_BYTE_STRING } from "./cbor/common";
+import { parseCBOR } from "./cbor/decode";
 import { CoseKey, coseToJwk, mapToCoseKey } from "./cose";
 
 const FLAG_ATTESTED_CREDENTIAL_DATA_INCLUDED = 0b0100_0000;
@@ -78,7 +79,7 @@ function encodeWithAttestationTypeNone(authData: Uint8Array) {
     return complete;
 };
 
-function getImportAlgorithm(jwk: JsonWebKey) {
+export function getImportAlgorithm(jwk: JsonWebKey) {
     if (jwk.alg === 'RS256') {
         return { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' };
     }
@@ -107,11 +108,11 @@ export async function parseAuthData(authData: Uint8Array) {
 
     const aaguid = authData.slice(AAGUID_OFFSET, AAGUID_OFFSET + AAGUID_LENGTH);
 
-    const CREDENTIAL_ID_LENGTH_OFFSET = 55;
+    const CREDENTIAL_ID_LENGTH_OFFSET = AAGUID_OFFSET + AAGUID_LENGTH;
     // Stored as a big-endian uint16
     const credentialIdLength = (authData[CREDENTIAL_ID_LENGTH_OFFSET]! << 8) | authData[CREDENTIAL_ID_LENGTH_OFFSET + 1]!;
 
-    const CREDENTIAL_ID_OFFSET = 57;
+    const CREDENTIAL_ID_OFFSET = CREDENTIAL_ID_LENGTH_OFFSET + 2;
     const credentialId = authData.slice(CREDENTIAL_ID_OFFSET, CREDENTIAL_ID_OFFSET + credentialIdLength);
 
     const [publicKey,] = parseCBOR(authData.slice(CREDENTIAL_ID_OFFSET + credentialIdLength));

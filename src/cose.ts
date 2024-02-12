@@ -1,9 +1,10 @@
 import { assert } from "./assert.js";
-import { DecodedValue } from "./cbor.js";
+import { DecodedValue } from "./cbor/decode.js";
+import { fromBase64Url, toBase64Url } from "./util.js";
 
-const COSE_ALG_ES256 = -7;
+export const COSE_ALG_ES256 = -7;
 const COSE_ALG_EDDSA = -8;
-const COSE_ALG_RS256 = -257;
+export const COSE_ALG_RS256 = -257;
 const COSE_EC_P256 = 1;
 const COSE_EC_ED25519 = 6;
 const COSE_KEY_TYPE_EC2 = 2;
@@ -37,19 +38,6 @@ interface RsaCoseKey extends CoseKey {
     '3': typeof COSE_ALG_RS256;
     '-1': Uint8Array;
     '-2': Uint8Array;
-}
-
-export function toBase64Url(array: Uint8Array | ArrayBuffer | ArrayBufferView): string {
-    let u8array: Uint8Array;
-    if (array instanceof Uint8Array) {
-        u8array = array;
-    } else if (array instanceof ArrayBuffer) {
-        u8array = new Uint8Array(array);
-    } else {
-        u8array = new Uint8Array(array.buffer);
-    }
-
-    return btoa(String.fromCharCode(...u8array)).replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 function isEcdsaCoseKey(key: CoseKey): key is EcdsaCoseKey {
@@ -118,7 +106,6 @@ function rsaCoseToJwk(key: RsaCoseKey): JsonWebKey {
 }
 
 export function mapToCoseKey(map: Map<DecodedValue, DecodedValue>): CoseKey {
-    console.log('Decoded COSE key is', map);
     const publicKey = Object.fromEntries(map);
 
     assert(publicKey !== null, 'The public key is null');
@@ -145,4 +132,46 @@ export function coseToJwk(key: CoseKey): JsonWebKey {
     }
 
     throw new Error('Unexpected key type ' + key['1']);
+}
+
+export function jwkToCose(jwk: JsonWebKey): CoseKey {
+    if (jwk.alg === 'ES256') {
+        assert(jwk.crv === 'P-256');
+        assert(jwk.x !== undefined);
+        assert(jwk.y !== undefined);
+
+        return {
+            '1': COSE_KEY_TYPE_EC2,
+            '3': COSE_ALG_ES256,
+            '-1': COSE_EC_P256,
+            '-2': fromBase64Url(jwk.x),
+            '-3': fromBase64Url(jwk.y),
+        }
+    }
+
+    if (jwk.alg === 'EdDSA') {
+        assert(jwk.crv === 'Ed25519');
+        assert(jwk.x !== undefined);
+
+        return {
+            '1': COSE_KEY_TYPE_EC2,
+            '3': COSE_ALG_ES256,
+            '-1': COSE_EC_P256,
+            '-2': fromBase64Url(jwk.x),
+        }
+    }
+
+    if (jwk.alg === 'RS256') {
+        assert(jwk.n !== undefined);
+        assert(jwk.e !== undefined);
+
+        return {
+            '1': COSE_KEY_TYPE_RSA,
+            '3': COSE_ALG_RS256,
+            '-1': fromBase64Url(jwk.n),
+            '-2': fromBase64Url(jwk.e),
+        }
+    }
+
+    throw new Error('Unexpected key algorithm ' + jwk.alg);
 }

@@ -1,11 +1,13 @@
 import { assert } from "./assert";
 import { isSelfAttestationUsed, parseAuthData, replaceIdentifyingInfo } from "./authData";
-import { AuthenticatorAssertion, CredTypesAndPubKeyAlg, InvalidStateError, UserCancelledError, authenticatorCancel, authenticatorGetAssertion, authenticatorMakeCredential, lookupCredentialById } from "./authenticator";
-import { parseAttestationObject } from "./cbor";
-import { toBase64Url } from "./cose";
+import { AuthenticatorAssertion, CredTypeAndPubKeyAlg, InvalidStateError, UserCancelledError, authenticatorCancel, authenticatorGetAssertion, authenticatorMakeCredential, lookupCredentialsById } from "./authenticator";
+import { parseAttestationObject } from "./cbor/decode";
+import { COSE_ALG_ES256, COSE_ALG_RS256 } from "./cose";
 import { getEffectiveDomain, isRegistrableDomainSuffix } from "./domain";
+import { createHash, getArrayBuffer, toBase64Url } from "./util";
 
 const ALLOWED_CREDENTIAL_TYPE = 'public-key';
+// These could be obtained by querying the authenticator through some authenticator-specific API on first connect and caching the answer.
 const AUTHENTICATOR_CAPABILITIES = {
     // It's not clear to me if a software authenticator counts as a platform or cross-platform authenticator, but platform is probably a better fit as it's not necessarily cross-platform.
     attachment: 'platform',
@@ -113,16 +115,16 @@ function shouldRequireUserVerification(userVerification: UserVerificationRequire
         || (userVerification === 'preferred' && AUTHENTICATOR_CAPABILITIES.supportsUserVerification);
 }
 
-function getCredTypesAndPubKeyAlgs(params: PublicKeyCredentialCreationOptions['pubKeyCredParams']): CredTypesAndPubKeyAlg[] {
+function getCredTypesAndPubKeyAlgs(params: PublicKeyCredentialCreationOptions['pubKeyCredParams']): CredTypeAndPubKeyAlg[] {
     if (params.length === 0) {
         return [
             {
                 type: ALLOWED_CREDENTIAL_TYPE,
-                alg: -7
+                alg: COSE_ALG_ES256
             },
             {
                 type: ALLOWED_CREDENTIAL_TYPE,
-                alg: -257
+                alg: COSE_ALG_RS256
             }
         ];
     }
@@ -142,18 +144,14 @@ function getCredTypesAndPubKeyAlgs(params: PublicKeyCredentialCreationOptions['p
     return credTypesAndPubKeyAlgs;
 }
 
-function createClientDataJSON(type: string, challenge: BufferSource, sameOriginWithAncestors: boolean) {
+function createClientDataJSON(type: string, challenge: BufferSource, origin: string, sameOriginWithAncestors: boolean) {
     return JSON.stringify({
         type: type,
         challenge: toBase64Url(challenge),
-        origin: window.origin,
+        origin: origin,
         crossOrigin: !sameOriginWithAncestors
         // The optional tokenBinding member is omitted as token binding is not supported.
     });
-}
-
-function createClientDataHash(clientDataJSON: string) {
-    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(clientDataJSON));
 }
 
 function userCancelAction(): Promise<never> {
@@ -182,7 +180,7 @@ async function makeCredentialAction(
     options: PublicKeyCredentialCreationOptions,
     clientDataJSON: string,
     clientDataHash: ArrayBuffer,
-    credTypesAndPubKeyAlgs: CredTypesAndPubKeyAlg[],
+    credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[],
     clientExtensions: Record<string, unknown>,
     authenticatorExtensions: Map<unknown, unknown>
 ): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
@@ -211,7 +209,11 @@ async function makeCredentialAction(
     const excludeCredentialDescriptorList = options.excludeCredentials;
 
     // Step 20.available.7.3
-    const attestationObjectResult = await authenticatorMakeCredential(clientDataHash, options.rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
+    // These two lines are just to satisfy TypeScript.
+    assert(options.rp.id !== undefined);
+    const rp = { id: options.rp.id, ...options.rp };
+
+    const attestationObjectResult = await authenticatorMakeCredential(clientDataHash, rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
 
     // Step 20.success.1 is skipped because there's only one authenticator.
 
@@ -360,10 +362,10 @@ export async function internalCreate(
     const authenticatorExtensions = new Map();
 
     // Steps 13 and 14
-    const clientDataJSON = createClientDataJSON('webauthn.create', options.challenge, sameOriginWithAncestors);
+    const clientDataJSON = createClientDataJSON('webauthn.create', options.challenge, origin, sameOriginWithAncestors);
 
     // Step 15
-    const clientDataHash = await createClientDataHash(clientDataJSON);
+    const clientDataHash = await createHash(clientDataJSON);
 
     // Step 16
     if (creationOptions.signal && creationOptions.signal.aborted) {
@@ -447,7 +449,7 @@ async function getAssertionAction(
             .filter(c => c.type === ALLOWED_CREDENTIAL_TYPE)
             .map(c => c.id);
 
-        const allowCredentialDescriptorList = await lookupCredentialById(options.rpId, allowedCredentialIds);
+        const allowCredentialDescriptorList = await lookupCredentialsById(options.rpId, allowedCredentialIds);
 
         if (allowCredentialDescriptorList.length === 0) {
             throw new Error('Authenticator does not have any of the allowed credential IDs');
@@ -484,7 +486,8 @@ async function getAssertionAction(
 
     // Step 17.success.2
     const assertionCreationData = {
-        credentialIdResult: savedCredentialId?.id ?? authenticatorResult.credentialId,
+        // If the saved credential ID is null, one will be provided in the result, they're mutually exclusive.
+        credentialIdResult: savedCredentialId?.id ?? authenticatorResult.credentialId!,
         clientDataJSONResult: clientDataJSON,
         authenticatorDataResult: authenticatorResult.authenticatorData,
         signatureResult: authenticatorResult.signature,
@@ -516,9 +519,7 @@ async function getAssertionAction(
             }
         });
 
-        const id = assertionCreationData.credentialIdResult instanceof ArrayBuffer
-            ? new global.Uint8Array(assertionCreationData.credentialIdResult)
-            : new global.Uint8Array(assertionCreationData.credentialIdResult.buffer);
+        const id = new global.Uint8Array(getArrayBuffer(assertionCreationData.credentialIdResult));
 
         // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
         const clientExtensionResults = global.JSON.parse(global.JSON.stringify(assertionCreationData.clientExtensionResults));
@@ -584,10 +585,10 @@ export async function internalDiscoverFromCredentialStore(
     const authenticatorExtensions = new Map();
 
     // Steps 9 and 10.
-    const clientDataJSON = createClientDataJSON('webauthn.get', options.challenge, sameOriginWithAncestors);
+    const clientDataJSON = createClientDataJSON('webauthn.get', options.challenge, origin, sameOriginWithAncestors);
 
     // Step 11
-    const clientDataHash = await createClientDataHash(clientDataJSON);
+    const clientDataHash = await createHash(clientDataJSON);
 
     // Step 12
     if (getOptions.signal && getOptions.signal.aborted) {

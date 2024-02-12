@@ -2,18 +2,10 @@
 // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-conforming-all-classes
 // https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html#ctap2-canonical-cbor-encoding-form
 // this makes it feasible to implement parsing from scratch.
-import { assert, strictEqual } from "./assert";
+import { assert, strictEqual } from "../assert";
+import { CBOR_TYPE_ARRAY, CBOR_TYPE_BYTE_STRING, CBOR_TYPE_FLOAT, CBOR_TYPE_MAP, CBOR_TYPE_NEGATIVE_INT, CBOR_TYPE_TAG, CBOR_TYPE_TEXT_STRING, CBOR_TYPE_UNSIGNED_INT } from "./common";
 
 export type DecodedValue = bigint | Uint8Array | string | DecodedValue[] | Map<DecodedValue, DecodedValue> | boolean | null | undefined | number;
-
-const CBOR_TYPE_UNSIGNED_INT = 0;
-const CBOR_TYPE_NEGATIVE_INT = 1;
-export const CBOR_TYPE_BYTE_STRING = 2;
-const CBOR_TYPE_TEXT_STRING = 3;
-const CBOR_TYPE_ARRAY = 4;
-const CBOR_TYPE_MAP = 5;
-const CBOR_TYPE_TAG = 6;
-const CBOR_TYPE_FLOAT = 7;
 
 function getType(byte: number) {
     return byte >> 5;
