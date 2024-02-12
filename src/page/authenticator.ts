@@ -1,5 +1,5 @@
 import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
-import { getRandomBytes, toBase64Url } from "../util";
+import { MESSAGE_TARGET_CONTENT_SCRIPT, MESSAGE_TARGET_PAGE_SCRIPT, getRandomBytes, toBase64Url } from "../util";
 
 export class UserCancelledError extends Error {}
 
@@ -10,7 +10,8 @@ function sendMessage<T>(invoke: string, parameters: Record<string, unknown>): Pr
         const messageId = toBase64Url(getRandomBytes(16));
 
         const listener = (event: any) => {
-            if (event.data?.messageId === messageId && event.data?.result !== undefined) {
+            if (event.data?.messageId === messageId
+                && event.data?.target === MESSAGE_TARGET_PAGE_SCRIPT) {
                 console.log('Received result event in page script', event);
                 window.removeEventListener('message', listener);
 
@@ -23,7 +24,12 @@ function sendMessage<T>(invoke: string, parameters: Record<string, unknown>): Pr
         };
         window.addEventListener('message', listener);
 
-        window.postMessage({ messageId, invoke, parameters }, window.origin);
+        window.postMessage({
+            messageId,
+            target: MESSAGE_TARGET_CONTENT_SCRIPT,
+            invoke,
+            parameters
+        }, window.origin);
     });
 }
 
