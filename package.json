@@ -5,7 +5,7 @@
   "main": "borderify.js",
   "type": "module",
   "scripts": {
-    "build": "npx tsc && npx esbuild build/inject.js --bundle --outfile=build/bundle.js",
+    "build": "npx tsc && npx esbuild build/background/background.js build/content/injector.js build/page/replacer.js --entry-names=bundle/[name] --bundle --outdir=build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",

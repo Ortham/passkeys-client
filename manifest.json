@@ -5,19 +5,29 @@
 
     "description": "Implements WebAuthn/passkey client functionality.",
 
+    "background": {
+      "scripts": ["build/bundle/background.js"],
+      "persistent": false,
+      "type": "module"
+    },
+
     "content_scripts": [
       {
         "matches": [
             "http://localhost/*",
             "https://*/*"
         ],
-        "js": ["build/bundle.js"],
+        "js": [
+          "build/bundle/injector.js"
+        ],
         "all_frames": true,
         "run_at": "document_start"
       }
     ],
 
-    "web_accessible_resources": ["build/bundle.js"],
+    "web_accessible_resources": [
+      "build/bundle/replacer.js"
+    ],
 
     "browser_specific_settings": {
         "gecko": {

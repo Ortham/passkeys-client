@@ -1,10 +1,11 @@
-import { assert } from "./assert";
-import { isSelfAttestationUsed, parseAuthData, replaceIdentifyingInfo } from "./authData";
-import { AuthenticatorAssertion, CredTypeAndPubKeyAlg, InvalidStateError, UserCancelledError, authenticatorCancel, authenticatorGetAssertion, authenticatorMakeCredential, lookupCredentialsById } from "./authenticator";
-import { parseAttestationObject } from "./cbor/decode";
-import { COSE_ALG_ES256, COSE_ALG_RS256 } from "./cose";
+import { assert } from "../assert";
+import { isSelfAttestationUsed, parseAuthData, replaceIdentifyingInfo } from "../authData";
+import { InvalidStateError, UserCancelledError, authenticatorCancel, authenticatorGetAssertion, authenticatorMakeCredential, lookupCredentialsById } from "./authenticator";
+import { parseAttestationObject } from "../cbor/decode";
+import { COSE_ALG_ES256, COSE_ALG_RS256 } from "../cose";
 import { getEffectiveDomain, isRegistrableDomainSuffix } from "./domain";
-import { createHash, getArrayBuffer, toBase64Url } from "./util";
+import { createHash, getArrayBuffer, toBase64Url } from "../util";
+import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
 
 const ALLOWED_CREDENTIAL_TYPE = 'public-key';
 // These could be obtained by querying the authenticator through some authenticator-specific API on first connect and caching the answer.

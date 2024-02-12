@@ -17,10 +17,4 @@ function replaceNativeFunctions() {
     });
 }
 
-if (globalThis.browser) {
-    const passkeys = document.createElement('script');
-    passkeys.src = browser.runtime.getURL('build/bundle.js');
-    document.documentElement.appendChild(passkeys);
-} else {
-    replaceNativeFunctions();
-}
+replaceNativeFunctions();

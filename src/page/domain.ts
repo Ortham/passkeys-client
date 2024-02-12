@@ -1,4 +1,4 @@
-import { getRandomBytes, toBase64Url } from "./util";
+import { getRandomBytes, toBase64Url } from "../util";
 
 function isValidIPv4AddressString(hostname: string) {
     // https://url.spec.whatwg.org/#valid-ipv4-address-string

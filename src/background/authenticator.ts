@@ -1,20 +1,9 @@
-import { assert } from "./assert";
-import { getImportAlgorithm } from "./authData";
-import { concatArrays, encodeMap } from "./cbor/encode";
-import { COSE_ALG_ES256, COSE_ALG_RS256, jwkToCose } from "./cose";
-import { createHash, getArrayBuffer, getRandomBytes } from "./util";
-
-export type CredTypeAndPubKeyAlg = {
-    type: PublicKeyCredentialType;
-    alg: COSEAlgorithmIdentifier;
-};
-
-export type AuthenticatorAssertion = {
-    credentialId: ArrayBuffer | undefined;
-    authenticatorData: ArrayBuffer;
-    signature: ArrayBuffer;
-    userHandle: ArrayBuffer | null;
-};
+import { assert } from "../assert";
+import { getImportAlgorithm } from "../authData";
+import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
+import { concatArrays, encodeMap } from "../cbor/encode";
+import { COSE_ALG_ES256, COSE_ALG_RS256, jwkToCose } from "../cose";
+import { createHash, getArrayBuffer, getRandomBytes } from "../util";
 
 type PublicKeyCredentialSource = {
     type: 'public-key';
