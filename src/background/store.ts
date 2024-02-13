@@ -1,15 +1,5 @@
+import { PublicKeyCredentialSource } from "../types";
 import { fromBase64Url, toBase64Url } from "../util";
-
-export type PublicKeyCredentialSource = {
-    type: 'public-key';
-    id: ArrayBuffer;
-    privateKey: JsonWebKey;
-    rpId: string;
-    userHandle: ArrayBuffer | null;
-    otherUI: {
-        signatureCounter: number;
-    };
-};
 
 type StoredCredential = {
     type: 'public-key';
@@ -18,6 +8,7 @@ type StoredCredential = {
     rpId: string;
     userHandle: string | null;
     otherUI: {
+        username: string;
         signatureCounter: number;
     };
 }

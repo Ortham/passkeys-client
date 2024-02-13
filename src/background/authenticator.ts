@@ -1,10 +1,11 @@
 import { assert } from "../assert";
 import { getImportAlgorithm } from "../authData";
-import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
+import { AuthenticatorAssertion, CredTypeAndPubKeyAlg, PublicKeyCredentialSource } from "../types";
 import { concatArrays, encodeMap } from "../cbor/encode";
 import { COSE_ALG_ES256, COSE_ALG_RS256, jwkToCose } from "../cose";
 import { createHash, getArrayBuffer, getRandomBytes } from "../util";
-import { PublicKeyCredentialSource, getAllStoredCredentials, getStoredCredentials, incrementSignatureCounter, storeCredential } from "./store";
+import { getAllStoredCredentials, getStoredCredentials, incrementSignatureCounter, storeCredential } from "./store";
+import { askUserForCreationConsent, askUserForDisclosureConsent, askUserForSelection } from "./user";
 
 
 export class UserCancelledError extends Error {}
@@ -279,8 +280,7 @@ export async function authenticatorMakeCredential(
         for (const descriptor of excludeCredentialDescriptorList) {
             const credential = await lookupCredentialById(descriptor.id);
             if (credential !== null && credential.rpId === rpEntity.id && credential.type === descriptor.type) {
-                // TODO: Confirm user consent.
-                const userConsented = false;
+                const userConsented = await askUserForDisclosureConsent(credential);
                 if (userConsented) {
                     throw new InvalidStateError('User consented to disclosure of excluded credential');
                 } else {
@@ -301,9 +301,7 @@ export async function authenticatorMakeCredential(
     }
 
     // Step 6
-    // TODO: Confirm user consent. It must involve user verification if requireUserVerification is true.
-    const userConsented = false;
-    const userVerified = false;
+    const { userConsented, userVerified } = await askUserForCreationConsent(rpEntity, userEntity, requireUserVerification);
     if (!userConsented) {
         throw new NotAllowedError('User did not consent to credential creation');
     }
@@ -331,6 +329,7 @@ export async function authenticatorMakeCredential(
             rpId: rpEntity.id,
             userHandle,
             otherUI: {
+                username: userEntity.name,
                 // Step 10
                 signatureCounter: 0
             }
@@ -407,11 +406,8 @@ export async function authenticatorGetAssertion(
     }
 
     // Step 7
-    // TODO: Get the user to select a credential. If requiresUserVerification is true then user verification must be performed.
-    const userConsented = false;
-    const userVerified = false;
-    const selectedCredential = credentialOptions[0]!;
-    if (!userConsented) {
+    const { selectedCredential, userVerified } = await askUserForSelection(credentialOptions, rpId, requireUserVerification);
+    if (selectedCredential === undefined) {
         throw new NotAllowedError('User did not consent to credential use');
     }
 

@@ -1,6 +1,6 @@
 # Passkeys Client
 
-This is a toy implementation of a WebAuthn client that supports passkeys which I wrote to check my understanding of how they work. **It is not safe for production use.** All messaging is unencrypted, the built-in authenticator stores credentials unencrypted, and it's probably trivial for malicious scripts to spoof any of the involved message sources. User interactions are currently unimplemented, and so attempts to create or get passkeys are currently hardcoded to fail.
+This is a toy implementation of a WebAuthn client that supports passkeys which I wrote to check my understanding of how they work. **It is not safe for production use.** All messaging is unencrypted, the built-in authenticator stores credentials unencrypted, and it's probably trivial for malicious scripts to spoof any of the involved message sources.
 
 The client is implemented as a web extension (tested in Firefox v122) that replaces the following native methods:
 

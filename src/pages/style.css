@@ -1,0 +1,31 @@
+body {
+    font-family: sans-serif;
+    background-color: #E0e0e0;
+}
+
+body[hidden] {
+    visibility: hidden;
+}
+
+form {
+    padding: 1em;
+}
+
+form > div {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin-bottom: 2em;
+    width: 20em;
+}
+
+label {
+    display: block;
+    margin-bottom: 0.5em;
+}
+
+input {
+    display: block;
+    height: 2em;
+    padding: 0 0.5em;
+}

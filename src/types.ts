@@ -11,3 +11,15 @@ export type AuthenticatorAssertion = {
     signature: ArrayBuffer;
     userHandle: ArrayBuffer | null;
 };
+
+export type PublicKeyCredentialSource = {
+    type: 'public-key';
+    id: ArrayBuffer;
+    privateKey: JsonWebKey;
+    rpId: string;
+    userHandle: ArrayBuffer | null;
+    otherUI: {
+        username: string;
+        signatureCounter: number;
+    };
+};

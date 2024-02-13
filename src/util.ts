@@ -1,5 +1,7 @@
 export const MESSAGE_TARGET_CONTENT_SCRIPT = 'content-script';
 export const MESSAGE_TARGET_PAGE_SCRIPT = 'page-script';
+export const MESSAGE_TARGET_BACKGROUND_SCRIPT = 'background-script';
+export const MESSAGE_TARGET_POPUP_SCRIPT = 'popup-script';
 
 export function toBase64Url(array: Uint8Array | ArrayBuffer | ArrayBufferView): string {
     let u8array: Uint8Array;

@@ -1,4 +1,4 @@
-import { MESSAGE_TARGET_CONTENT_SCRIPT, MESSAGE_TARGET_PAGE_SCRIPT } from "../util";
+import { MESSAGE_TARGET_BACKGROUND_SCRIPT, MESSAGE_TARGET_CONTENT_SCRIPT, MESSAGE_TARGET_PAGE_SCRIPT } from "../util";
 
 const passkeys = document.createElement('script');
 passkeys.src = browser.runtime.getURL('build/bundle/replacer.js');
@@ -13,7 +13,10 @@ window.addEventListener('message', async event => {
 
     console.log('Received message in content script', event);
 
-    const result = await browser.runtime.sendMessage(event.data);
+    const result = await browser.runtime.sendMessage({
+        ...event.data,
+        target: MESSAGE_TARGET_BACKGROUND_SCRIPT
+    });
 
     console.log('Received response in content script', result);
 
