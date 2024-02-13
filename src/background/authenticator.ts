@@ -2,7 +2,7 @@ import { assert } from "../assert";
 import { getImportAlgorithm } from "../authData";
 import { AuthenticatorAssertion, CredTypeAndPubKeyAlg, PublicKeyCredentialSource } from "../types";
 import { concatArrays, encodeMap } from "../cbor/encode";
-import { COSE_ALG_ES256, COSE_ALG_RS256, jwkToCose } from "../cose";
+import { COSE_ALG_ES256, COSE_ALG_RS256, jwkAlgToCoseIdentifier, jwkToCose } from "../cose";
 import { createHash, getArrayBuffer, getRandomBytes } from "../util";
 import { getAllStoredCredentials, getStoredCredentials, incrementSignatureCounter, storeCredential } from "./store";
 import { askUserForCreationConsent, askUserForDisclosureConsent, askUserForSelection } from "./user";
@@ -150,17 +150,20 @@ function generateAuthenticatorData(rpIdHash: ArrayBuffer, flags: number, signCou
     );
 }
 
-function generateAttestationObject(authenticatorData: Uint8Array, hash: ArrayBuffer, enterpriseAttestationPossible: boolean): Uint8Array {
-    // The authenticator does not support attestation.
-    // TODO: Implement self attestation.
-
+async function generateAttestationObject(privateKey: JsonWebKey, authenticatorData: Uint8Array, hash: ArrayBuffer, enterpriseAttestationPossible: boolean): Promise<Uint8Array> {
     if (enterpriseAttestationPossible) {
         // Enterprise attestation is not supported, do nothing.
     }
 
+    // The authenticator only supports self attestation.
+    const signature = await generateSignature(privateKey, authenticatorData, hash);
+
     const map = new Map();
-    map.set('fmt', 'none');
-    map.set('attStmt', {});
+    map.set('fmt', 'packed');
+    map.set('attStmt', {
+        alg: jwkAlgToCoseIdentifier(privateKey.alg),
+        sig: signature
+    });
     map.set('authData', authenticatorData);
 
     return encodeMap(map);
@@ -308,13 +311,14 @@ export async function authenticatorMakeCredential(
 
     let credentialSource: PublicKeyCredentialSource;
     let publicKey: CryptoKey;
+    let privateKey: JsonWebKey;
     try {
         // Step 7.1
         assert(credTypesAndPubKeyAlgs.length > 0);
         const keyGenParams = getKeyGenParams(credTypesAndPubKeyAlgs[0]!.alg)
         const keyPair = await crypto.subtle.generateKey(keyGenParams, true, ['sign', 'verify']);
         publicKey = keyPair.publicKey;
-        const privateKey = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+        privateKey = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
 
         // Step 7.2
         const userHandle = getArrayBuffer(userEntity.id);
@@ -358,7 +362,7 @@ export async function authenticatorMakeCredential(
     const authenticatorData = generateAuthenticatorData(rpIdHash, flags, credentialSource.otherUI.signatureCounter, attestedCredentialData, processedExtensions);
 
     // Step 13
-    const attestationObject = generateAttestationObject(authenticatorData, hash, enterpriseAttestationPossible);
+    const attestationObject = await generateAttestationObject(privateKey, authenticatorData, hash, enterpriseAttestationPossible);
 
     return attestationObject;
 }

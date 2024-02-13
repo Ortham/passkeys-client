@@ -134,6 +134,22 @@ export function coseToJwk(key: CoseKey): JsonWebKey {
     throw new Error('Unexpected key type ' + key['1']);
 }
 
+export function jwkAlgToCoseIdentifier(alg: string | undefined): COSEAlgorithmIdentifier {
+    if (alg === 'ES256') {
+        return COSE_ALG_ES256;
+    }
+
+    if (alg === 'EdDSA') {
+        return COSE_ALG_EDDSA;
+    }
+
+    if (alg === 'RS256') {
+        return COSE_ALG_RS256;
+    }
+
+    throw new Error('Unexpected key algorithm ' + alg);
+}
+
 export function jwkToCose(jwk: JsonWebKey): CoseKey {
     if (jwk.alg === 'ES256') {
         assert(jwk.crv === 'P-256');
