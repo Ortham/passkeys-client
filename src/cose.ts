@@ -154,9 +154,9 @@ export function jwkToCose(jwk: JsonWebKey): CoseKey {
         assert(jwk.x !== undefined);
 
         return {
-            '1': COSE_KEY_TYPE_EC2,
-            '3': COSE_ALG_ES256,
-            '-1': COSE_EC_P256,
+            '1': COSE_KEY_TYPE_OKP,
+            '3': COSE_ALG_EDDSA,
+            '-1': COSE_EC_ED25519,
             '-2': fromBase64Url(jwk.x),
         }
     }
