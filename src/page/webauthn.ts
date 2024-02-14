@@ -177,6 +177,66 @@ function abortSignalAction(options: CredentialCreationOptions | CredentialReques
     });
 }
 
+function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, response: AuthenticatorResponse, clientExtensionResults: Record<string, unknown>): PublicKeyCredential {
+    // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
+    const copiedResults = global.JSON.parse(global.JSON.stringify(clientExtensionResults));
+
+
+    let responseJSON: Record<string, unknown>;
+    if (response instanceof AuthenticatorAttestationResponse) {
+        const publicKey = response.getPublicKey();
+
+        responseJSON = {
+            clientDataJSON: toBase64Url(response.clientDataJSON),
+            authenticatorData: toBase64Url(response.getAuthenticatorData()),
+            transports: response.getTransports(),
+            publicKey: publicKey === null ? null : toBase64Url(publicKey),
+            publicKeyAlgorithm: response.getPublicKeyAlgorithm(),
+            attestationObject: toBase64Url(response.attestationObject)
+        }
+    } else if (response instanceof AuthenticatorAssertionResponse) {
+        responseJSON = {
+            clientDataJSON: toBase64Url(response.clientDataJSON),
+            authenticatorData: toBase64Url(response.authenticatorData),
+            signature: toBase64Url(response.signature),
+            userHandle: response.userHandle === null ? null : toBase64Url(response.userHandle),
+            // TODO: Add support for this (it's in WebAuthn Level 3)
+            attestationObject: null
+        };
+    }
+
+    return global.Object.create(PublicKeyCredential.prototype, {
+        id: {
+            value: toBase64Url(id)
+        },
+        rawId: {
+            value: id
+        },
+        type: {
+            value: 'public-key',
+        },
+        response: {
+            value: response,
+        },
+        authenticatorAttachment: {
+            value: null
+        },
+        getClientExtensionResults: {
+            value: () => copiedResults,
+        },
+        toJSON: {
+            value: () => ({
+                id: toBase64Url(id),
+                rawId: toBase64Url(id),
+                response: responseJSON,
+                authenticatorAttachment: null,
+                clientExtensionResults: copiedResults,
+                type: 'public-key'
+            })
+        }
+    });
+}
+
 async function makeCredentialAction(
     options: PublicKeyCredentialCreationOptions,
     clientDataJSON: string,
@@ -282,25 +342,7 @@ async function makeCredentialAction(
             }
         });
 
-        // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
-        const clientExtensionResults = global.JSON.parse(global.JSON.stringify(credentialCreationData.clientExtensionResults));
-        const pubKeyCred = global.Object.create(PublicKeyCredential.prototype, {
-            id: {
-                value: toBase64Url(id)
-            },
-            rawId: {
-                value: id
-            },
-            type: {
-                value: 'public-key',
-            },
-            response: {
-                value: response,
-            },
-            getClientExtensionResults: {
-                value: () => clientExtensionResults,
-            }
-        });
+        const pubKeyCred = createPublicKeyCredential(global, id, response, credentialCreationData.clientExtensionResults);
 
         // Step 3.5
         return pubKeyCred;
@@ -429,7 +471,7 @@ async function getAssertionAction(
     clientDataHash: ArrayBuffer,
     clientExtensions: Record<string, unknown>,
     authenticatorExtensions: Map<unknown, unknown>
-): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
+): Promise<((global: typeof globalThis) => Credential) | null> {
     assert(options.rpId !== undefined);
 
     // Step 14
@@ -518,33 +560,16 @@ async function getAssertionAction(
             },
             userHandle: {
                 value: userHandle
+            },
+            attestationObject: {
+                // TODO: Add support for this (it's in WebAuthn Level 3)
+                value: null
             }
         });
 
         const id = new global.Uint8Array(getArrayBuffer(assertionCreationData.credentialIdResult));
 
-        // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
-        const clientExtensionResults = global.JSON.parse(global.JSON.stringify(assertionCreationData.clientExtensionResults));
-
-        const pubKeyCred = global.Object.create(PublicKeyCredential.prototype, {
-            id: {
-                value: toBase64Url(id)
-            },
-            rawId: {
-                value: id
-            },
-            type: {
-                value: 'public-key',
-            },
-            response: {
-                value: response,
-            },
-            getClientExtensionResults: {
-                value: () => clientExtensionResults,
-            }
-        });
-
-        return pubKeyCred;
+        return createPublicKeyCredential(global, id, response, assertionCreationData.clientExtensionResults);
     }
 
     // Step 17.success.4 skipped as there is only one authenticator.
@@ -559,7 +584,7 @@ export async function internalDiscoverFromCredentialStore(
     origin: string,
     getOptions: CredentialRequestOptions,
     sameOriginWithAncestors: boolean
-): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
+): Promise<((global: typeof globalThis) => Credential) | null> {
     // https://www.w3.org/TR/credential-management-1/#algorithm-discover-creds
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-discover-from-external-source
     console.log('Called replacement internal [[DiscoverFromCredentialStore]]');
