@@ -134,7 +134,7 @@ function encodeArray(data: unknown[]): Uint8Array {
     return concatArrays(...arrays);
 }
 
-export function encodeMap(map: Map<string, unknown>): Uint8Array {
+export function encodeMap(map: Map<string | number, unknown>): Uint8Array {
     const lengthBuffer = encodeDataLength(map.size);
     lengthBuffer[0] |= getTypeBits(CBOR_TYPE_MAP);
 

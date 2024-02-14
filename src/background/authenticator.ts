@@ -167,7 +167,7 @@ async function generateAttestedCredentialData(credentialId: ArrayBuffer, publicK
 
     const jwt = await crypto.subtle.exportKey('jwk', publicKey);
     const coseKey = jwkToCose(jwt);
-    const cborKey = encodeMap(new Map(Object.entries(coseKey)));
+    const cborKey = encodeMap(coseKey);
 
     return concatArrays(aaguid, credentialIdLength, new Uint8Array(credentialId), cborKey);
 }

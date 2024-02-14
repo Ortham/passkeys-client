@@ -1,7 +1,7 @@
 import { assert } from "./assert";
 import { CBOR_TYPE_BYTE_STRING } from "./cbor/common";
 import { parseCBOR } from "./cbor/decode";
-import { CoseKey, coseToJwk, mapToCoseKey } from "./cose";
+import { coseToJwk, jwkAlgToCoseIdentifier } from "./cose";
 
 const FLAG_ATTESTED_CREDENTIAL_DATA_INCLUDED = 0b0100_0000;
 const FLAGS_OFFSET = 32;
@@ -95,9 +95,8 @@ export function getImportAlgorithm(jwk: JsonWebKey) {
     throw new Error('Unrecognised algorithm ' + jwk.alg);
 }
 
-async function encodeAsSpki(coseKey: CoseKey) {
+async function encodeAsSpki(jwk: JsonWebKey) {
     // Easiest way to encode a COSE key as SPKI is to convert it to JWK first, then import it using importKey() and then use exportKey() to export it as SPKI.
-    const jwk = coseToJwk(coseKey);
     const key = await crypto.subtle.importKey('jwk', jwk, getImportAlgorithm(jwk), true, ['verify']);
 
     return crypto.subtle.exportKey('spki', key);
@@ -118,9 +117,9 @@ export async function parseAuthData(authData: Uint8Array) {
     const [publicKey,] = parseCBOR(authData.slice(CREDENTIAL_ID_OFFSET + credentialIdLength));
     assert(publicKey instanceof Map, "Parsed CBOR public key should be a Map");
 
-    const cosePublicKey = mapToCoseKey(publicKey);
-    const spkiPublicKey = await encodeAsSpki(cosePublicKey);
-    const publicKeyAlgorithm = cosePublicKey['3'];
+    const jwk = coseToJwk(publicKey);
+    const spkiPublicKey = await encodeAsSpki(jwk);
+    const publicKeyAlgorithm = jwkAlgToCoseIdentifier(jwk.alg);
 
     return { aaguid, credentialId, publicKey: spkiPublicKey, publicKeyAlgorithm };
 }
