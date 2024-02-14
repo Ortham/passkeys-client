@@ -195,7 +195,7 @@ function generateFlags(
     return flags;
 }
 
-function generateAuthenticatorData(rpIdHash: ArrayBuffer, flags: number, signCount: number, attestedCredentialData: Uint8Array | undefined, extensions: Record<string, unknown>): Uint8Array {
+function generateAuthenticatorData(rpIdHash: ArrayBuffer, flags: number, signCount: number, attestedCredentialData: Uint8Array | undefined, extensions: Map<string, unknown>): Uint8Array {
     const signCountArray = new ArrayBuffer(4);
     new DataView(signCountArray).setUint32(0, signCount, false);
 
@@ -441,8 +441,11 @@ export async function authenticatorMakeCredential(
     }
 
     // Step 9
+    const processedExtensions = new Map();
     // No authenticator extensions are supported.
-    const processedExtensions = {};
+    for (const _extension of extensions) {
+        continue;
+    }
 
     // Step 10 was already done above when creating the credential.
 
@@ -509,8 +512,11 @@ export async function authenticatorGetAssertion(
     }
 
     // Step 8
-    // No extensions are supported.
-    const processedExtensions = {};
+    const processedExtensions = new Map();
+    // No authenticator extensions are supported.
+    for (const _extension of extensions) {
+        continue;
+    }
 
     // Step 9
     await incrementSignatureCounter(selectedCredential);
