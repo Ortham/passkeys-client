@@ -159,14 +159,14 @@ function isAsciiString(string: string) {
     return /^[\p{ASCII}]+$/u.test(string);
 }
 
-async function getPublicSuffix(hostname: string) {
+function getPublicSuffix(hostname: string) {
     if (!isDomain(hostname)) {
         return null;
     }
 
     const trailingDot = hostname.endsWith('.') ? '.' : '';
 
-    const publicSuffix = await getPublicSuffixUsingList(hostname);
+    const publicSuffix = getPublicSuffixUsingList(hostname);
 
     if (!isAsciiString(publicSuffix) || publicSuffix.endsWith('.')) {
         throw new Error('Invalid public suffix');
@@ -175,7 +175,7 @@ async function getPublicSuffix(hostname: string) {
     return publicSuffix + trailingDot;
 }
 
-export async function isRegistrableDomainSuffix(hostSuffixString: string, originalHost: string) {
+export function isRegistrableDomainSuffix(hostSuffixString: string, originalHost: string) {
     // https://html.spec.whatwg.org/multipage/browsers.html#is-a-registrable-domain-suffix-of-or-is-equal-to
 
     if (hostSuffixString === "") {
@@ -197,11 +197,11 @@ export async function isRegistrableDomainSuffix(hostSuffixString: string, origin
             return false;
         }
 
-        if (hostSuffix === await getPublicSuffix(hostSuffix)) {
+        if (hostSuffix === getPublicSuffix(hostSuffix)) {
             return false;
         }
 
-        const originalPublicSuffix = await getPublicSuffix(originalHost);
+        const originalPublicSuffix = getPublicSuffix(originalHost);
         if (originalPublicSuffix === null) {
             throw new Error('Invalid public suffix for original host');
         }
