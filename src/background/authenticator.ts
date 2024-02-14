@@ -254,6 +254,35 @@ function getSigningAlgorithm(jwk: JsonWebKey): AlgorithmIdentifier | EcdsaParams
     throw new Error('Unrecognised algorithm ' + jwk.alg);
 }
 
+function derEncodeInteger(buffer: ArrayBuffer): Uint8Array {
+    const DER_TAG_INTEGER = 0x02;
+    assert(buffer.byteLength > 0);
+
+    // DER uses the first bit as a sign bit, so if the first bit of the buffer is 1 then it needs to be prefixed by a zero byte. DER also requires that integers are represented in the shortest possible form, so any leading zero bytes should be skipped.
+    // https://letsencrypt.org/docs/a-warm-welcome-to-asn1-and-der/
+
+    // First cut off any initial zero bytes.
+    let array = new Uint8Array(buffer);
+    const firstNonZeroByte = array.findIndex(b => b !== 0);
+    assert(firstNonZeroByte !== -1);
+    array = array.subarray(firstNonZeroByte);
+
+    // Now check if a padding byte needs to be added.
+    let padding = 0;
+    if ((array[0]! & 0b1000_0000) === 0) {
+        padding = 0;
+    } else {
+        padding = 1;
+    }
+
+    const paddedArray = new Uint8Array(2 + padding + array.byteLength);
+    paddedArray[0] = DER_TAG_INTEGER;
+    paddedArray[1] = padding + array.byteLength;
+    paddedArray.set(array, 2 + padding);
+
+    return paddedArray;
+}
+
 async function generateSignature(
     privateKey: JsonWebKey,
     authenticatorData: Uint8Array,
@@ -279,17 +308,14 @@ async function generateSignature(
     const s = signature.slice(numberLength);
 
     const DER_TAG_SEQUENCE = 0x30;
-    const DER_TAG_INTEGER = 0x02;
 
-    // Plus 2 bytes each for the integer tag and length bytes.
-    const sequenceLength = signature.byteLength + 4;
+    const rEncoded = derEncodeInteger(r);
+    const sEncoded = derEncodeInteger(s);
 
     return concatArrays(
-        new Uint8Array([DER_TAG_SEQUENCE, sequenceLength]),
-        new Uint8Array([DER_TAG_INTEGER, numberLength]),
-        new Uint8Array(r),
-        new Uint8Array([DER_TAG_INTEGER, numberLength]),
-        new Uint8Array(s)
+        new Uint8Array([DER_TAG_SEQUENCE, rEncoded.byteLength + sEncoded.byteLength]),
+        new Uint8Array(rEncoded),
+        new Uint8Array(sEncoded)
     );
 }
 
