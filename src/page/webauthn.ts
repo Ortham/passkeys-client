@@ -473,10 +473,10 @@ async function getAssertionAction(
 
         if (distinctTransports.size > 0) {
             // There's only one transport available to use.
-            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
+            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
         } else {
             // There's only one transport available to use.
-            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
+            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
         }
     } else {
         authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
