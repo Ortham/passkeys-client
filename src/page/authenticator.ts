@@ -37,7 +37,7 @@ export async function lookupCredentialsById(
     rpId: string,
     allowedCredentialIds: BufferSource[]
 ): Promise<PublicKeyCredentialDescriptor[]> {
-    return sendMessage<PublicKeyCredentialDescriptor[]>('authenticatorGetAssertion', {
+    return sendMessage<PublicKeyCredentialDescriptor[]>('lookupCredentialsById', {
         rpId,
         allowedCredentialIds
     });
