@@ -3,9 +3,10 @@ import { getImportAlgorithm } from "../authData";
 import { AuthenticatorAssertion, CredTypeAndPubKeyAlg, PublicKeyCredentialSource } from "../types";
 import { concatArrays, encodeMap } from "../cbor/encode";
 import { COSE_ALG_ES256, COSE_ALG_RS256, jwkAlgToCoseIdentifier, jwkToCose } from "../cose";
-import { createHash, getArrayBuffer, getRandomBytes } from "../util";
-import { getAllStoredCredentials, getStoredCredentials, incrementSignatureCounter, storeCredential } from "./store";
+import { createHash, fromBase64Url, getArrayBuffer, getRandomBytes, toBase64Url } from "../util";
+import { getAllStoredCredentials, getCredentialOtherUI, getEncryptionKey, getStoredCredentials, incrementSignatureCounter, storeCredential, storeCredentialOtherUI } from "./store";
 import { askUserForCreationConsent, askUserForDisclosureConsent, askUserForSelection } from "./user";
+import { decodeMap } from "../cbor/decode";
 
 
 export class UserCancelledError extends Error {}
@@ -26,7 +27,7 @@ const AUTHENTICATOR_CAPABILITIES = {
     attachment: 'platform',
     supportsResidentKeys: true,
     supportsUserVerification: true,
-    supportsServerSideCredentials: false
+    supportsServerSideCredentials: true
 };
 
 function areBuffersEqual(buffer1: BufferSource, buffer2: BufferSource) {
@@ -46,19 +47,90 @@ function areBuffersEqual(buffer1: BufferSource, buffer2: BufferSource) {
     return true;
 }
 
+function getCredentialEncryptionAlgorithm(jwk: JsonWebKey): Algorithm {
+    if (jwk.alg === 'A256GCM') {
+        return { name: 'AES-GCM' };
+    }
+
+    throw new Error('Unrecognised encryption algorithm: ' + jwk.alg);
+}
+
+async function encryptCredential(credential: Omit<PublicKeyCredentialSource, 'id'>): Promise<ArrayBuffer> {
+    // Omit the signature counter from the encrypted data as otherwise that couldn't be incremented without changing the credential ID. Same with the username, the website might allow it to be changed.
+    const dataToEncrypt = {
+        privateKey: credential.privateKey,
+        rpId: credential.rpId,
+        userHandle: credential.userHandle === null
+            ? null
+            : toBase64Url(credential.userHandle)
+    };
+    const json = JSON.stringify(dataToEncrypt);
+    const plaintext = new TextEncoder().encode(json);
+
+    const jwk = await getEncryptionKey();
+    const algorithm = getCredentialEncryptionAlgorithm(jwk);
+
+    const key = await crypto.subtle.importKey('jwk', jwk, algorithm, false, ['encrypt']);
+    const iv = getRandomBytes(12);
+    const ciphertext = await crypto.subtle.encrypt({ name: algorithm.name, iv }, key, plaintext);
+
+    // Now encode the IV and ciphertext as CBOR so that the two are structurally separated.
+    const map = new Map([['iv', iv], ['data', ciphertext]]);
+    return encodeMap(map);
+}
+
+async function decryptCredential(credentialId: BufferSource): Promise<Omit<PublicKeyCredentialSource, 'otherUI'>> {
+    const buffer = getArrayBuffer(credentialId);
+    const map = decodeMap(new Uint8Array(buffer)).value;
+
+    const iv = map.get('iv');
+    assert(iv instanceof Uint8Array);
+
+    const ciphertext = map.get('data');
+    assert(ciphertext instanceof Uint8Array);
+
+    const jwk = await getEncryptionKey();
+    const algorithm = getCredentialEncryptionAlgorithm(jwk);
+
+    const key = await crypto.subtle.importKey('jwk', jwk, algorithm, false, ['decrypt']);
+
+    const plaintext = await crypto.subtle.decrypt({ name: algorithm.name, iv }, key, ciphertext);
+    const json = new TextDecoder().decode(plaintext);
+    const data = JSON.parse(json);
+
+    return {
+        type: 'public-key',
+        id: buffer,
+        privateKey: data.privateKey,
+        rpId: data.rpId,
+        userHandle: data.userHandle === null ? null : fromBase64Url(data.userHandle)
+    };
+}
+
 async function lookupCredentialById(
-    credentialId: BufferSource
+    credentialId: BufferSource,
+    storedCredentials?: PublicKeyCredentialSource[]
 ): Promise<PublicKeyCredentialSource | null> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-lookup-credsource-by-credid
     console.log('Called lookupCredentialById');
 
     // Step 1
     if (AUTHENTICATOR_CAPABILITIES.supportsServerSideCredentials) {
-        // TODO: implement support for server-side credentials
+        try {
+            const partialCredentialSource = await decryptCredential(credentialId);
+            // Now lookup what goes in otherUI from the authenticator's storage.
+            const otherUI = await getCredentialOtherUI(getArrayBuffer(credentialId));
+            return {
+                ...partialCredentialSource,
+                otherUI
+            };
+        } catch (err) {
+            console.warn('Credential ID', credentialId, 'does not appear to be an encrypted credential source', err);
+        }
     }
 
     // Step 2
-    const credentials = await getAllStoredCredentials();
+    const credentials = storedCredentials ?? await getAllStoredCredentials();
     const credential = credentials.find(c => areBuffersEqual(credentialId, c.id));
     if (credential !== undefined) {
         return credential;
@@ -227,26 +299,33 @@ export async function lookupCredentialsById(
 ): Promise<PublicKeyCredentialDescriptor[]> {
     console.log('Called lookupCredentialsById');
 
-    // Match with rpId
+    // Fetch stored credentials for the RP so that they're not retrieved for each credential.
     const credentials = (await getStoredCredentials(rpId)).slice();
-    if (credentials.length === 0) {
-        return Promise.resolve([]);
-    }
 
-    const matchedCredentials: PublicKeyCredentialDescriptor[] = [];
-    for (const id of allowedCredentialIds) {
-        // No need to match with type, as that's always public-key in this authenticator.
-        const index = credentials.findIndex(c => areBuffersEqual(id, c.id));
-        if (index > -1) {
-            const [credential] = credentials.splice(index, 1);
-            matchedCredentials.push({
-                id: credential!.id,
-                type: credential!.type
-            });
+    const promises = allowedCredentialIds.map(async id => {
+        const credential = await lookupCredentialById(id, credentials);
+        if (credential === null || credential.rpId !== rpId) {
+            return null;
         }
-    }
 
-    return matchedCredentials;
+        return {
+            id: credential.id,
+            type: credential.type
+        };
+    });
+
+    const descriptors = await Promise.all(promises);
+
+    return descriptors.filter((c => c !== null)) as PublicKeyCredentialDescriptor[];
+}
+
+function findSupportedAlgorithm(credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[]): number | undefined {
+    const entry = credTypesAndPubKeyAlgs.find(entry =>
+        entry.type === ALLOWED_CREDENTIAL_TYPE
+            && (entry.alg === COSE_ALG_ES256 || entry.alg === COSE_ALG_RS256)
+    );
+
+    return entry?.alg;
 }
 
 export async function authenticatorMakeCredential(
@@ -270,12 +349,9 @@ export async function authenticatorMakeCredential(
     }
 
     // Step 2
-    for (const credTypeAndPubKeyAlg of credTypesAndPubKeyAlgs) {
-        if (credTypeAndPubKeyAlg.type !== ALLOWED_CREDENTIAL_TYPE
-            || (credTypeAndPubKeyAlg.alg !== COSE_ALG_ES256
-                && credTypeAndPubKeyAlg.alg !== COSE_ALG_RS256)) {
-            throw new NotSupportedError('Given credential type or algorithm is not supported');
-        }
+    const supportedAlgorithm = findSupportedAlgorithm(credTypesAndPubKeyAlgs);
+    if (supportedAlgorithm === undefined) {
+        throw new NotSupportedError('Given credential type or algorithm is not supported');
     }
 
     // Step 3
@@ -314,8 +390,7 @@ export async function authenticatorMakeCredential(
     let privateKey: JsonWebKey;
     try {
         // Step 7.1
-        assert(credTypesAndPubKeyAlgs.length > 0);
-        const keyGenParams = getKeyGenParams(credTypesAndPubKeyAlgs[0]!.alg)
+        const keyGenParams = getKeyGenParams(supportedAlgorithm);
         const keyPair = await crypto.subtle.generateKey(keyGenParams, true, ['sign', 'verify']);
         publicKey = keyPair.publicKey;
         privateKey = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
@@ -324,11 +399,8 @@ export async function authenticatorMakeCredential(
         const userHandle = getArrayBuffer(userEntity.id);
 
         // Step 7.3
-        credentialSource = {
+        const partialCredentialSource: Omit<PublicKeyCredentialSource, 'id'> = {
             type: 'public-key',
-            // Step 7.4.1 and 7.4.2
-            // Always create client-side discoverable credentials, as that's what passkeys are.
-            id: getRandomBytes(16).buffer,
             privateKey,
             rpId: rpEntity.id,
             userHandle,
@@ -339,8 +411,29 @@ export async function authenticatorMakeCredential(
             }
         };
 
-        // Step 7.4.3 and 7.4.4
-        await storeCredential(credentialSource);
+        if (requireResidentKey) {
+            // Step 7.4.1
+            const credentialId = getRandomBytes(16).buffer;
+
+            // Step 7.4.2
+            credentialSource = {
+                ...partialCredentialSource,
+                id: credentialId,
+            };
+
+            // Step 7.4.3 and 7.4.4
+            await storeCredential(credentialSource);
+        } else {
+            // Step 7.5
+            credentialSource = {
+                ...partialCredentialSource,
+                id: await encryptCredential(partialCredentialSource)
+            }
+
+            // Step 10
+            // Store the signature counter and username.
+            await storeCredentialOtherUI(credentialSource.id, credentialSource.otherUI);
+        }
     } catch (err) {
         console.error('Caught error while creating credential', err);
         // Step 8
@@ -420,8 +513,7 @@ export async function authenticatorGetAssertion(
     const processedExtensions = {};
 
     // Step 9
-    // This is all that's required because selectedCredential is a reference to the in-memory stored data.
-    await incrementSignatureCounter(selectedCredential.id);
+    await incrementSignatureCounter(selectedCredential);
 
     // Step 10
     const rpIdHash = await createHash(rpId);

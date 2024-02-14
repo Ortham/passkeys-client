@@ -153,7 +153,7 @@ function decodeArray(buffer: Uint8Array): { value: DecodedValue[]; end: bigint; 
     }
 }
 
-function decodeMap(buffer: Uint8Array): { value: Map<DecodedValue, DecodedValue>; end: bigint; } {
+export function decodeMap(buffer: Uint8Array): { value: Map<DecodedValue, DecodedValue>; end: bigint; } {
     assert(buffer.byteLength > 0, "Can't decode map from no data");
     strictEqual(getType(buffer[0]!), CBOR_TYPE_MAP);
 
