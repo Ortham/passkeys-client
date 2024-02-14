@@ -3,15 +3,10 @@ export const MESSAGE_TARGET_PAGE_SCRIPT = 'page-script';
 export const MESSAGE_TARGET_BACKGROUND_SCRIPT = 'background-script';
 export const MESSAGE_TARGET_POPUP_SCRIPT = 'popup-script';
 
-export function toBase64Url(array: Uint8Array | ArrayBuffer | ArrayBufferView): string {
-    let u8array: Uint8Array;
-    if (array instanceof Uint8Array) {
-        u8array = array;
-    } else if (array instanceof ArrayBuffer) {
-        u8array = new Uint8Array(array);
-    } else {
-        u8array = new Uint8Array(array.buffer);
-    }
+export function toBase64Url(array: Uint8Array | BufferSource): string {
+    const u8array = array instanceof Uint8Array
+        ? array
+        : new Uint8Array(getArrayBuffer(array));
 
     return btoa(String.fromCharCode(...u8array))
         .replace(/\+/g, '-')
