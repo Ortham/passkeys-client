@@ -8,6 +8,7 @@ import { createHash, getArrayBuffer, toBase64Url } from "../util";
 import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
 
 const ALLOWED_CREDENTIAL_TYPE = 'public-key';
+const AUTHENTICATOR_ID = "builtin";
 // These could be obtained by querying the authenticator through some authenticator-specific API on first connect and caching the answer.
 const AUTHENTICATOR_CAPABILITIES = {
     // It's not clear to me if a software authenticator counts as a platform or cross-platform authenticator, but platform is probably a better fit as it's not necessarily cross-platform.
@@ -43,9 +44,33 @@ function getTimeout(options: PublicKeyCredentialCreationOptions) {
     }
 }
 
-function startTimer(timeout: number) {
-    return new Promise((resolve, _reject) => {
-        setTimeout(resolve, timeout);
+function handleInterrupt(signal: AbortSignal | undefined, timeout: number, issuedRequests: Set<string>): Promise<never> {
+    return new Promise((_resolve, reject) => {
+        console.log('Starting timer for', timeout, 'ms');
+        const timeoutSignal = AbortSignal.timeout(timeout);
+
+        timeoutSignal.addEventListener('abort', async () => {
+            if (issuedRequests.has(AUTHENTICATOR_ID)) {
+                authenticatorCancel();
+                issuedRequests.delete(AUTHENTICATOR_ID);
+            }
+
+            reject(new DOMException('Timer expired', 'NotAllowedError'));
+        });
+
+        if (signal) {
+            signal.addEventListener('abort', async () => {
+                if (issuedRequests.has(AUTHENTICATOR_ID)) {
+                    authenticatorCancel();
+                    issuedRequests.delete(AUTHENTICATOR_ID);
+                }
+
+                // In WebAuthn Level 3 this throws options.signal's abort reason.
+                reject(new DOMException('Abort signalled', 'AbortError'));
+            });
+        }
+
+        // TODO: Add the ability for the user to cancel the process through some UI.
     });
 }
 
@@ -155,28 +180,6 @@ function createClientDataJSON(type: string, challenge: BufferSource, origin: str
     });
 }
 
-function userCancelAction(): Promise<never> {
-    return new Promise(async (_resolve, reject) => {
-        // TODO: Add the ability for the user to cancel the process.
-        const userCancelled = false;
-
-        if (userCancelled) {
-            await authenticatorCancel();
-            reject(new DOMException('User cancelled operation', 'NotAllowedError'));
-        }
-    });
-}
-
-function abortSignalAction(options: CredentialCreationOptions | CredentialRequestOptions): Promise<never> {
-    return new Promise(async (_resolve, reject) => {
-        if (options.signal && options.signal.aborted) {
-            await authenticatorCancel();
-            // In WebAuthn Level 3 this throws options.signal's abort reason.
-            reject(new DOMException('Abort signalled', 'AbortError'));
-        }
-    });
-}
-
 function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, response: AuthenticatorResponse, clientExtensionResults: Record<string, unknown>): PublicKeyCredential {
     // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
     const copiedResults = global.JSON.parse(global.JSON.stringify(clientExtensionResults));
@@ -237,14 +240,12 @@ function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, r
     });
 }
 
-async function makeCredentialAction(
+async function invokeMakeCredential(
     options: PublicKeyCredentialCreationOptions,
-    clientDataJSON: string,
     clientDataHash: ArrayBuffer,
     credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[],
-    clientExtensions: Record<string, unknown>,
     authenticatorExtensions: Map<unknown, unknown>
-): Promise<((global: typeof globalThis) => Promise<Credential>) | null> {
+): Promise<ArrayBuffer> {
     // Step 20.available.2
     if (options.authenticatorSelection) {
         validateAuthenticatorSelection(options.authenticatorSelection);
@@ -274,10 +275,15 @@ async function makeCredentialAction(
     assert(options.rp.id !== undefined);
     const rp = { id: options.rp.id, ...options.rp };
 
-    const attestationObjectResult = await authenticatorMakeCredential(clientDataHash, rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
+    return authenticatorMakeCredential(clientDataHash, rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
+}
 
-    // Step 20.success.1 is skipped because there's only one authenticator.
-
+function handleMakeCredentialSuccess(
+    options: PublicKeyCredentialCreationOptions,
+    clientDataJSON: string,
+    clientExtensions: Record<string, unknown>,
+    attestationObjectResult: ArrayBuffer
+): (global: typeof globalThis) => Promise<Credential> {
     // Step 20.success.2
     const credentialCreationData = {
         attestationObjectResult: attestationObjectResult,
@@ -415,41 +421,48 @@ export async function internalCreate(
         throw new DOMException('Abort signalled', 'AbortError');
     }
 
-    // Steps 17 and 18 are skipped because there is only a single authenticator so they aren't relevant.
+    // Step 17
+    // Although there's only a single authenticator, the set can be passed into handleInterrupt and changes to its content outside of the function will be visible inside it.
+    const issuedRequests = new Set<string>();
+
+    // Step 18
+    // There's only one authenticator and it's always available, so there's nothing to do here.
 
     // Step 19
-    const lifetimeTimer = startTimer(timeout)
-        .then(() => authenticatorCancel())
-        .then(() => {
-            // Step 21
-            throw new DOMException('Timer expired', 'NotAllowedError');
-        });
+    const interruptPromise = handleInterrupt(creationOptions.signal, timeout, issuedRequests);
 
     // Step 20
-    // In WebAuthn Level 2, the user cancel action returns an exception without terminating the algorithm, which doesn't make sense. In Level 3, it terminates, so using that behaviour.
-    const userCancelActionPromise = userCancelAction();
-    const abortSignalActionPromise = abortSignalAction(creationOptions);
-    const makeCredentialPromise = makeCredentialAction(options, clientDataJSON, clientDataHash, credTypesAndPubKeyAlgs, clientExtensions, authenticatorExtensions)
-        .catch(err => {
-            console.error('Caught error while running makeCredentialAction', err);
-            if (err instanceof UserCancelledError) {
-                // There are no other authenticators, so no need to do anything.
-            } else if (err instanceof InvalidStateError) {
-                // There are no other authenticators to cancel.
-                throw new DOMException('Authenticator encountered an invalid state', 'InvalidStateError');
-            } else {
-                // No need to track issued requests, so nothing to do here.
-            }
+    const requestPromise = invokeMakeCredential(options, clientDataHash, credTypesAndPubKeyAlgs, authenticatorExtensions);
 
-            // If no exception has been thrown in this catch, this should just wait until lifetimeTimer is done.
-            return lifetimeTimer;
-        });
+    // Step 20.available.8
+    issuedRequests.add(AUTHENTICATOR_ID);
+
+    const responsePromise = requestPromise.then(attestationObject => {
+        // Step 20.success.1
+        issuedRequests.delete(AUTHENTICATOR_ID);
+
+        return handleMakeCredentialSuccess(options, clientDataJSON, clientExtensions, attestationObject);
+    }).catch(err => {
+        console.error('Caught error while running invokeMakeCredential', err);
+
+        issuedRequests.delete(AUTHENTICATOR_ID);
+
+        if (err instanceof UserCancelledError) {
+            // There are no other authenticators, so no need to do anything.
+        } else if (err instanceof InvalidStateError) {
+            // There are no other authenticators to cancel.
+            throw new DOMException('Authenticator encountered an invalid state', 'InvalidStateError');
+        } else {
+            // Nothing else to do.
+        }
+
+        // Let the promise reject when the timer runs out.
+        return interruptPromise;
+    });
 
     return Promise.race([
-        lifetimeTimer,
-        userCancelActionPromise,
-        abortSignalActionPromise,
-        makeCredentialPromise
+        interruptPromise,
+        responsePromise
     ]);
 }
 
@@ -465,18 +478,13 @@ export function internalCollectFromCredentialStore(
     return [];
 }
 
-async function getAssertionAction(
+async function invokeGetAssertion(
     options: PublicKeyCredentialRequestOptions,
-    clientDataJSON: string,
     clientDataHash: ArrayBuffer,
-    clientExtensions: Record<string, unknown>,
+    savedCredentialIds: Map<string, PublicKeyCredentialDescriptor>,
     authenticatorExtensions: Map<unknown, unknown>
-): Promise<((global: typeof globalThis) => Credential) | null> {
+): Promise<AuthenticatorAssertion> {
     assert(options.rpId !== undefined);
-
-    // Step 14
-    // savedCredentialId is used instead of a savedCredentialIds map because there is only one authenticator.
-    let savedCredentialId: PublicKeyCredentialDescriptor | undefined;
 
     // Step 17.available.1
     if (options.userVerification === 'required' && !AUTHENTICATOR_CAPABILITIES.supportsUserVerification) {
@@ -487,7 +495,6 @@ async function getAssertionAction(
     const requireUserVerification = shouldRequireUserVerification(options.userVerification);
 
     // Step 17.available.3
-    let authenticatorResult: AuthenticatorAssertion;
     if (options.allowCredentials && options.allowCredentials.length > 0) {
         const allowedCredentialIds = options.allowCredentials
             .filter(c => c.type === ALLOWED_CREDENTIAL_TYPE)
@@ -502,7 +509,7 @@ async function getAssertionAction(
         const distinctTransports = new Set();
 
         if (allowCredentialDescriptorList.length === 1) {
-            savedCredentialId = allowCredentialDescriptorList[0];
+            savedCredentialIds.set(AUTHENTICATOR_ID, allowCredentialDescriptorList[0]!);
         }
 
         for (const descriptor of allowCredentialDescriptorList) {
@@ -515,23 +522,26 @@ async function getAssertionAction(
 
         if (distinctTransports.size > 0) {
             // There's only one transport available to use.
-            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
+            return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
         } else {
             // There's only one transport available to use.
-            authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
+            return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
         }
     } else {
-        authenticatorResult = await authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
+        return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
     }
+}
 
-    // Step 17.available.4 skipped
-
-    // Step 17.success.1 is skipped because there's only one authenticator.
-
+function handleGetAssertionSuccess(
+    clientDataJSON: string,
+    clientExtensions: Record<string, unknown>,
+    savedCredentialIds: Map<string, PublicKeyCredentialDescriptor>,
+    authenticatorResult: AuthenticatorAssertion
+): (global: typeof globalThis) => Credential {
     // Step 17.success.2
     const assertionCreationData = {
         // If the saved credential ID is null, one will be provided in the result, they're mutually exclusive.
-        credentialIdResult: savedCredentialId?.id ?? authenticatorResult.credentialId!,
+        credentialIdResult: savedCredentialIds.get(AUTHENTICATOR_ID)?.id ?? authenticatorResult.credentialId!,
         clientDataJSONResult: clientDataJSON,
         authenticatorDataResult: authenticatorResult.authenticatorData,
         signatureResult: authenticatorResult.signature,
@@ -622,42 +632,48 @@ export async function internalDiscoverFromCredentialStore(
         throw new DOMException('Abort signalled', 'AbortError');
     }
 
-    // Step 13 skipped because there is only one authenticator.
+    // Step 13
+    // Although there's only a single authenticator, the set can be passed into handleInterrupt and changes to its content outside of the function will be visible inside it.
+    const issuedRequests = new Set<string>();
 
-    // Step 14 is skipped because the variable is initialised inside getAssertionAction()
+    // Step 14
+    // Although there's only a single authenticator, the map can be passed into invokeGetAssertion and changes to its content outside of the function will be visible inside it.
+    const savedCredentialIds = new Map<string, PublicKeyCredentialDescriptor>();
 
     // Step 15 skipped because there is only one authenticator.
 
     // Step 16
-    const lifetimeTimer = startTimer(timeout)
-        .then(() => authenticatorCancel())
-        .then(() => {
-            // Step 18
-            throw new DOMException('Timer expired', 'NotAllowedError');
-        });
+    const interruptPromise = handleInterrupt(getOptions.signal, timeout, issuedRequests);
 
     // Step 17
-    // In WebAuthn Level 2, the user cancel action returns an exception without terminating the algorithm, which doesn't make sense. In Level 3, it terminates, so using that behaviour.
-    const userCancelActionPromise = userCancelAction();
-    const abortSignalActionPromise = abortSignalAction(getOptions);
-    const getAssertionPromise = getAssertionAction(options, clientDataJSON, clientDataHash,  clientExtensions, authenticatorExtensions)
-        .catch(err => {
-            console.error('Caught error while running getAssertionAction', err);
-            if (err instanceof UserCancelledError) {
-                // There are no other authenticators, so no need to do anything.
-            } else {
-                // No need to track issued requests, so nothing to do here.
-            }
+    const requestPromise = invokeGetAssertion(options, clientDataHash, savedCredentialIds, authenticatorExtensions);
 
-            // If no exception has been thrown in this catch, this should just wait until lifetimeTimer is done.
-            return lifetimeTimer;
-        });
+    // Step 17.available.4
+    issuedRequests.add(AUTHENTICATOR_ID);
+
+    const responsePromise = requestPromise.then(assertion => {
+        // Step 17.success.1
+        issuedRequests.delete(AUTHENTICATOR_ID);
+
+        return handleGetAssertionSuccess(clientDataJSON, clientExtensions, savedCredentialIds, assertion);
+    }).catch(err => {
+        console.error('Caught error while running invokeGetAssertion', err);
+
+        issuedRequests.delete(AUTHENTICATOR_ID);
+
+        if (err instanceof UserCancelledError) {
+            // There are no other authenticators, so no need to do anything.
+        } else {
+            // Nothing else to do.
+        }
+
+        // Let the promise reject when the timer runs out.
+        return interruptPromise;
+    });
 
     return Promise.race([
-        lifetimeTimer,
-        userCancelActionPromise,
-        abortSignalActionPromise,
-        getAssertionPromise
+        interruptPromise,
+        responsePromise
     ]);
 }
 
