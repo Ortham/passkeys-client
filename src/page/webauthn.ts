@@ -36,8 +36,12 @@ function clamp(value: number, min: number, max: number) {
     return Math.max(Math.min(value, max), min);
 }
 
-function getTimeout(options: PublicKeyCredentialCreationOptions) {
-    if (options.authenticatorSelection?.userVerification === 'discouraged') {
+function getTimeout(options: PublicKeyCredentialCreationOptions | PublicKeyCredentialRequestOptions) {
+    const isUserVerificationDiscouraged = ('authenticatorSelection' in options
+            && options.authenticatorSelection?.userVerification === 'discouraged')
+        || ('userVerification' in options && options.userVerification === 'discouraged');
+
+    if (isUserVerificationDiscouraged) {
         return options.timeout ? clamp(options.timeout, 30_000, 180_000) : 120_000;
     } else {
         return options.timeout ? clamp(options.timeout, 30_000, 600_000) : 300_000;
@@ -608,7 +612,7 @@ export async function internalDiscoverFromCredentialStore(
     const options = getOptions.publicKey;
 
     // Step 3
-    const timeout = options.timeout !== undefined ? clamp(options.timeout, 300_000, 600_000) : 300_000;
+    const timeout = getTimeout(options);
 
     // Steps 4 and 5
     const effectiveDomain = getEffectiveDomain(origin);
