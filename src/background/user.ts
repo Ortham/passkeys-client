@@ -68,20 +68,6 @@ export async function askUserToCreatePassword(): Promise<void> {
     await showPopup(pageOptions, 'askUserToCreatePassword', {});
 }
 
-export async function askUserForDisclosureConsent(
-    credential: PublicKeyCredentialSource
-): Promise<boolean> {
-    const pageOptions = {
-        path: 'src/pages/disclosureConsent.html',
-        height: 300,
-        width: 400
-    };
-
-    return showPopup(pageOptions, 'askUserForDisclosureConsent', {
-        credential
-    });
-}
-
 export async function askUserForCreationConsent(
     rpEntity: Required<PublicKeyCredentialRpEntity>,
     userEntity: PublicKeyCredentialUserEntity,

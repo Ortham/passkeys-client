@@ -3,7 +3,7 @@ import { createMessageListener, setUpUserVerification, showDialog } from "./comm
 async function askUserForCreationConsent(rpEntity, userEntity, requireUserVerification) {
     const messageElement = document.getElementById('message');
 
-    let message = `${rpEntity.id} (${rpEntity.name}) wants to create a passkey for the user ${userEntity.name} (${userEntity.displayName}).`;
+    const message = `${rpEntity.id} (${rpEntity.name}) wants to create a passkey for the user ${userEntity.name} (${userEntity.displayName}).`;
 
     messageElement.textContent = message;
 

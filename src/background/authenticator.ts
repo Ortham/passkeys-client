@@ -5,7 +5,7 @@ import { concatArrays, encodeMap } from "../cbor/encode";
 import { COSE_ALG_ES256, COSE_ALG_RS256, jwkAlgToCoseIdentifier, jwkToCose } from "../cose";
 import { createHash, fromBase64Url, getArrayBuffer, getRandomBytes, toBase64Url } from "../util";
 import { getAllStoredCredentials, getCredentialOtherUI, getEncryptionKey, getStoredCredentials, incrementSignatureCounter, storeCredential, storeCredentialOtherUI } from "./store";
-import { askUserForCreationConsent, askUserForDisclosureConsent, askUserForSelection } from "./user";
+import { askUserForCreationConsent, askUserForSelection } from "./user";
 import { decodeMap } from "../cbor/decode";
 
 
@@ -392,7 +392,8 @@ export async function authenticatorMakeCredential(
                     throw new UserCancelledError('Abort was signalled');
                 }
 
-                const userConsented = await askUserForDisclosureConsent(credential);
+                // This consent never requires user verification, since it's just picking how the process should fail.
+                const userConsented = await askUserForCreationConsent(rpEntity, userEntity, false);
                 if (userConsented) {
                     throw new InvalidStateError('User consented to disclosure of excluded credential');
                 } else {
