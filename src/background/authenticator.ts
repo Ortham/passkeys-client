@@ -1,8 +1,8 @@
 import { assert } from "../assert";
-import { getImportAlgorithm } from "../authData";
+import { getImportAlgorithm, getKeyGenParams, getSigningAlgorithm, isSupportedAlgorithm } from "../algorithm";
 import { AuthenticatorAssertion, CredTypeAndPubKeyAlg, PublicKeyCredentialSource } from "../types";
 import { concatArrays, encodeMap } from "../cbor/encode";
-import { COSE_ALG_ES256, COSE_ALG_RS256, jwkAlgToCoseIdentifier, jwkToCose } from "../cose";
+import { jwkAlgToCoseIdentifier, jwkToCose } from "../cose";
 import { createHash, fromBase64Url, getArrayBuffer, getRandomBytes, toBase64Url } from "../util";
 import { getAllStoredCredentials, getCredentialOtherUI, getEncryptionKey, getStoredCredentials, incrementSignatureCounter, storeCredential, storeCredentialOtherUI } from "./store";
 import { askUserForCreationConsent, askUserForSelection } from "./user";
@@ -140,23 +140,6 @@ async function lookupCredentialById(
     return null;
 }
 
-function getKeyGenParams(algorithm: COSEAlgorithmIdentifier): RsaHashedKeyGenParams | EcKeyGenParams {
-    if (algorithm === COSE_ALG_RS256) {
-        return {
-            name: 'RSASSA-PKCS1-v1_5',
-            modulusLength: 4096,
-            publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
-            hash: 'SHA-256'
-        };
-    }
-
-    if (algorithm === COSE_ALG_ES256) {
-        return { name: 'ECDSA', namedCurve: 'P-256' };
-    }
-
-    throw new Error('Unrecognised algorithm ' + algorithm);
-}
-
 async function generateAttestedCredentialData(credentialId: ArrayBuffer, publicKey: CryptoKey): Promise<Uint8Array> {
     // Set the aaguid to all zeroes.
     const aaguid = new Uint8Array(16);
@@ -241,18 +224,6 @@ async function generateAttestationObject(privateKey: JsonWebKey, authenticatorDa
     return encodeMap(map);
 }
 
-
-function getSigningAlgorithm(jwk: JsonWebKey): AlgorithmIdentifier | EcdsaParams {
-    if (jwk.alg === 'RS256') {
-        return { name: 'RSASSA-PKCS1-v1_5' };
-    }
-
-    if (jwk.alg === 'ES256') {
-        return { name: 'ECDSA', hash: 'SHA-256' };
-    }
-
-    throw new Error('Unrecognised algorithm ' + jwk.alg);
-}
 
 function derEncodeInteger(buffer: ArrayBuffer): Uint8Array {
     const DER_TAG_INTEGER = 0x02;
@@ -347,8 +318,7 @@ export async function lookupCredentialsById(
 
 function findSupportedAlgorithm(credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[]): number | undefined {
     const entry = credTypesAndPubKeyAlgs.find(entry =>
-        entry.type === ALLOWED_CREDENTIAL_TYPE
-            && (entry.alg === COSE_ALG_ES256 || entry.alg === COSE_ALG_RS256)
+        entry.type === ALLOWED_CREDENTIAL_TYPE && isSupportedAlgorithm(entry.alg)
     );
 
     return entry?.alg;

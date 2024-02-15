@@ -1,3 +1,4 @@
+import { getImportAlgorithm } from "./algorithm";
 import { assert } from "./assert";
 import { CBOR_TYPE_BYTE_STRING } from "./cbor/common";
 import { parseCBOR } from "./cbor/decode";
@@ -78,22 +79,6 @@ function encodeWithAttestationTypeNone(authData: Uint8Array) {
 
     return complete;
 };
-
-export function getImportAlgorithm(jwk: JsonWebKey) {
-    if (jwk.alg === 'RS256') {
-        return { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' };
-    }
-
-    if (jwk.alg === 'ES256') {
-        return { name: 'ECDSA', namedCurve: 'P-256' };
-    }
-
-    if (jwk.alg === 'EdDSA') {
-        return { name: 'Ed25519' };
-    }
-
-    throw new Error('Unrecognised algorithm ' + jwk.alg);
-}
 
 async function encodeAsSpki(jwk: JsonWebKey) {
     // Easiest way to encode a COSE key as SPKI is to convert it to JWK first, then import it using importKey() and then use exportKey() to export it as SPKI.
