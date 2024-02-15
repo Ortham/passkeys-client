@@ -363,6 +363,7 @@ export async function authenticatorMakeCredential(
     credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[],
     enterpriseAttestationPossible: boolean,
     extensions: Map<unknown, unknown>,
+    signal: AbortSignal,
     excludeCredentialDescriptorList?: PublicKeyCredentialDescriptor[],
 ): Promise<ArrayBuffer> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-make-cred
@@ -385,6 +386,12 @@ export async function authenticatorMakeCredential(
         for (const descriptor of excludeCredentialDescriptorList) {
             const credential = await lookupCredentialById(descriptor.id);
             if (credential !== null && credential.rpId === rpEntity.id && credential.type === descriptor.type) {
+
+                // Check for abort just before asking for user input.
+                if (signal.aborted) {
+                    throw new UserCancelledError('Abort was signalled');
+                }
+
                 const userConsented = await askUserForDisclosureConsent(credential);
                 if (userConsented) {
                     throw new InvalidStateError('User consented to disclosure of excluded credential');
@@ -403,6 +410,11 @@ export async function authenticatorMakeCredential(
     // Step 5
     if (requireUserVerification && !AUTHENTICATOR_CAPABILITIES.supportsUserVerification) {
         throw new ConstraintError('User verification is not supported');
+    }
+
+    // Check for abort just before asking for user input.
+    if (signal.aborted) {
+        throw new UserCancelledError('Abort was signalled');
     }
 
     // Step 6
@@ -437,6 +449,11 @@ export async function authenticatorMakeCredential(
             }
         };
 
+        // Check for abort just before writing changes to storage.
+        if (signal.aborted) {
+            throw new UserCancelledError('Abort was signalled');
+        }
+
         if (requireResidentKey) {
             // Step 7.4.1
             const credentialId = getRandomBytes(16).buffer;
@@ -462,6 +479,11 @@ export async function authenticatorMakeCredential(
         }
     } catch (err) {
         console.error('Caught error while creating credential', err);
+
+        if (err instanceof UserCancelledError) {
+            throw err;
+        }
+
         // Step 8
         throw new UnknownError('Error occurred while creating credential');
     }
@@ -486,6 +508,11 @@ export async function authenticatorMakeCredential(
     // Step 13
     const attestationObject = await generateAttestationObject(privateKey, authenticatorData, hash, enterpriseAttestationPossible);
 
+    // Check for abort just before returning, as there are no more awaits beyond this point.
+    if (signal.aborted) {
+        throw new UserCancelledError('Abort was signalled');
+    }
+
     return attestationObject;
 }
 
@@ -494,6 +521,7 @@ export async function authenticatorGetAssertion(
     hash: ArrayBuffer,
     requireUserVerification: boolean,
     extensions: Map<unknown, unknown>,
+    signal: AbortSignal,
     allowCredentialDescriptorList?: PublicKeyCredentialDescriptor[]
 ): Promise<AuthenticatorAssertion> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-get-assertion
@@ -531,6 +559,11 @@ export async function authenticatorGetAssertion(
         throw new NotAllowedError('No matching credentials');
     }
 
+    // Check for abort just before asking for user input.
+    if (signal.aborted) {
+        throw new UserCancelledError('Abort was signalled');
+    }
+
     // Step 7
     const { selectedCredential, userVerified } = await askUserForSelection(credentialOptions, rpId, requireUserVerification);
     if (selectedCredential === undefined) {
@@ -542,6 +575,11 @@ export async function authenticatorGetAssertion(
     // No authenticator extensions are supported.
     for (const _extension of extensions) {
         continue;
+    }
+
+    // Check for abort just before writing changes to storage.
+    if (signal.aborted) {
+        throw new UserCancelledError('Abort was signalled');
     }
 
     // Step 9
@@ -562,6 +600,11 @@ export async function authenticatorGetAssertion(
         throw new UnknownError('Error occurred while generating signature');
     }
 
+    // Check for abort just before returning, as there are no more awaits beyond this point.
+    if (signal.aborted) {
+        throw new UserCancelledError('Abort was signalled');
+    }
+
     // Step 13
     const credentialId = allowCredentialDescriptorList === undefined
             || allowCredentialDescriptorList.length > 1
@@ -573,10 +616,4 @@ export async function authenticatorGetAssertion(
         signature,
         userHandle: selectedCredential.userHandle
     };
-}
-
-export async function authenticatorCancel() {
-    // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-cancel
-    console.log('Called authenticatorCancel');
-    // TODO: Implement this. Probably need some sort of request ID to store and then match against before persisting or returning any data in the other authenticator interface functions.
 }
