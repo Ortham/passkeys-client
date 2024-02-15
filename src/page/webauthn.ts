@@ -239,7 +239,9 @@ function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, r
                 authenticatorAttachment: null,
                 clientExtensionResults: copiedResults,
                 type: 'public-key'
-            })
+            }),
+            // GitHub uses a polyfill that tries to replace toJSON's value.
+            writable: true
         }
     });
 }
