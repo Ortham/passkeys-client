@@ -246,12 +246,37 @@ function derEncodeInteger(buffer: ArrayBuffer): Uint8Array {
         padding = 1;
     }
 
-    const paddedArray = new Uint8Array(2 + padding + array.byteLength);
+    const dataLength = padding + array.byteLength;
+    assert(dataLength <= 127, 'Integer in EC signature is much larger than expected');
+
+    const paddedArray = new Uint8Array(2 + dataLength);
     paddedArray[0] = DER_TAG_INTEGER;
-    paddedArray[1] = padding + array.byteLength;
+    paddedArray[1] = dataLength;
     paddedArray.set(array, 2 + padding);
 
     return paddedArray;
+}
+
+function derEncodeSequence(...elements: Uint8Array[]): Uint8Array {
+    const DER_TAG_SEQUENCE = 0x30;
+
+    const sequenceLength = elements.map(e => e.byteLength)
+        .reduce((prev, curr) => prev + curr, 0);
+
+    let sequenceLengthEncoded;
+    if (sequenceLength <= 127) {
+        // Can use the short form.
+        sequenceLengthEncoded = [sequenceLength];
+    } else {
+        // Need to use the long form.
+        assert(sequenceLength < 256, 'Sequence in EC signature is much larger than expected');
+        sequenceLengthEncoded = [0b1000_0001, sequenceLength];
+    }
+
+    return concatArrays(
+        new Uint8Array([DER_TAG_SEQUENCE, ...sequenceLengthEncoded]),
+        ...elements
+    );
 }
 
 async function generateSignature(
@@ -272,22 +297,15 @@ async function generateSignature(
     // ECDSA signatures need to be DER-encoded.
 
     assert(signature.byteLength % 2 === 0);
-    assert(signature.byteLength < 256);
     const numberLength = signature.byteLength / 2;
 
     const r = signature.slice(0, numberLength);
     const s = signature.slice(numberLength);
 
-    const DER_TAG_SEQUENCE = 0x30;
-
     const rEncoded = derEncodeInteger(r);
     const sEncoded = derEncodeInteger(s);
 
-    return concatArrays(
-        new Uint8Array([DER_TAG_SEQUENCE, rEncoded.byteLength + sEncoded.byteLength]),
-        new Uint8Array(rEncoded),
-        new Uint8Array(sEncoded)
-    );
+    return derEncodeSequence(rEncoded, sEncoded);
 }
 
 export async function lookupCredentialsById(
