@@ -41,6 +41,7 @@ function getTimeout(options: PublicKeyCredentialCreationOptions | PublicKeyCrede
             && options.authenticatorSelection?.userVerification === 'discouraged')
         || ('userVerification' in options && options.userVerification === 'discouraged');
 
+    // In WebAuthn Level 3, there is a single recommended range of 300_000 to 600_000 with the default being the former.
     if (isUserVerificationDiscouraged) {
         return options.timeout ? clamp(options.timeout, 30_000, 180_000) : 120_000;
     } else {
@@ -181,6 +182,7 @@ function createClientDataJSON(type: string, challenge: BufferSource, origin: str
         origin: origin,
         crossOrigin: !sameOriginWithAncestors
         // The optional tokenBinding member is omitted as token binding is not supported.
+        // In WebAuthn Level 3, tokenBinding is replaced by a new topOrigin member.
     });
 }
 
@@ -271,6 +273,12 @@ async function invokeMakeCredential(
     options.attestation = validateAttestation(options.attestation);
 
     const enterpriseAttestationPossible = false;
+
+    // WebAuthn Level 3 inserts a couple of new steps here that related to options.attestation.
+    let attestationFormats = (options as { attestationFormats?: string[] }).attestationFormats ?? [];
+    if (options.attestation === 'none') {
+        attestationFormats = ['none'];
+    }
 
     // Steps 20.available.6 and .7.1 and .7.2
     // We choose not to filter out credentials with different transports.
@@ -383,6 +391,7 @@ export async function internalCreate(
 
     // Step 2
     if (!sameOriginWithAncestors) {
+        // In WebAuthn Level 3 this only throws if the relevant global object does not have transient activation.
         throw new DOMException('Called cross-origin', 'NotAllowedError');
     }
 
@@ -433,6 +442,8 @@ export async function internalCreate(
 
     // Step 18
     // There's only one authenticator and it's always available, so there's nothing to do here.
+
+    // WebAuthn Level 3 inserts a new step here: "Consider the value of hints and craft the user interface accordingly, as the user-agent sees fit."
 
     // Step 19
     const interruptPromise = handleInterrupt(creationOptions.signal, timeout, issuedRequests);
@@ -500,6 +511,17 @@ async function invokeGetAssertion(
     // Step 17.available.2
     const requireUserVerification = shouldRequireUserVerification(options.userVerification);
 
+    // WebAuthn Level 3 inserts a couple of new steps here that related to options.attestation.
+
+    // https://www.w3.org/TR/webauthn-3/#dom-publickeycredentialrequestoptions-attestation
+    // Validate and if necessary override attestation field.
+    const attestation = validateAttestation((options as { attestation?: AttestationConveyancePreference; }).attestation);
+
+    let attestationFormats = (options as { attestationFormats?: string[] }).attestationFormats ?? [];
+    if (attestation === 'none') {
+        attestationFormats = ['none'];
+    }
+
     // Step 17.available.3
     if (options.allowCredentials && options.allowCredentials.length > 0) {
         const allowedCredentialIds = options.allowCredentials
@@ -553,7 +575,10 @@ function handleGetAssertionSuccess(
         signatureResult: authenticatorResult.signature,
         userHandleResult: authenticatorResult.userHandle,
         clientExtensionResults: clientExtensions
+        // In WebAuthn Level 3 this has an assertionAttestation member that comes from the authenticator
     };
+
+    // WebAuthn Level 3 inserts two new steps that operate on its new credentialIdFilter variable.
 
     // Step 17.success.3
     const constructAssertionAlg = (global: typeof globalThis) => {
@@ -613,6 +638,8 @@ export async function internalDiscoverFromCredentialStore(
     // Step 2
     const options = getOptions.publicKey;
 
+    // WebAuthn Level 3 inserts a new step here to deal with conditional mediation "If options.mediation is present with the value conditional:"
+
     // Step 3
     const timeout = getTimeout(options);
 
@@ -648,10 +675,16 @@ export async function internalDiscoverFromCredentialStore(
 
     // Step 15 skipped because there is only one authenticator.
 
+    // WebAuthn Level 3 inserts a new step here: "Let silentlyDiscoveredCredentials be a new map whose entries are of the form: DiscoverableCredentialMetadata → authenticator."
+
+    // WebAuthn Level 3 inserts a new step here: "Consider the value of hints and craft the user interface accordingly, as the user-agent sees fit."
+
     // Step 16
     const interruptPromise = handleInterrupt(getOptions.signal, timeout, issuedRequests);
 
     // Step 17
+    // WebAuthn Level 3 adds two new branches to this step for dealing with conditional mediation.
+    // In WebAuthn Level 3 if conditional mediation is in use then silent credential discovery is used instead of what invokeGetAssertion does.
     const requestPromise = invokeGetAssertion(options, clientDataHash, savedCredentialIds, authenticatorExtensions);
 
     // Step 17.available.4

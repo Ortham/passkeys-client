@@ -353,6 +353,7 @@ export async function authenticatorMakeCredential(
     extensions: Map<unknown, unknown>,
     signal: AbortSignal,
     excludeCredentialDescriptorList?: PublicKeyCredentialDescriptor[],
+    // WebAuthn Level 3 adds a new attestationFormats input
 ): Promise<ArrayBuffer> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-make-cred
     console.log('Called authenticatorMakeCredential');
@@ -489,6 +490,8 @@ export async function authenticatorMakeCredential(
     // Step 11
     const attestedCredentialData = await generateAttestedCredentialData(credentialSource.id, publicKey);
 
+    // WebAuthn Level 3 inserts a new step here to pick an attestationFormat value.
+
     // Step 12
     const rpIdHash = await createHash(rpEntity.id);
     const flags = generateFlags(userVerified, true, Object.keys(processedExtensions).length > 0);
@@ -512,6 +515,7 @@ export async function authenticatorGetAssertion(
     extensions: Map<unknown, unknown>,
     signal: AbortSignal,
     allowCredentialDescriptorList?: PublicKeyCredentialDescriptor[]
+    // WebAuthn Level 3 adds a new attestationFormats input
 ): Promise<AuthenticatorAssertion> {
     // https://www.w3.org/TR/2021/REC-webauthn-2-20210408/#sctn-op-get-assertion
     console.log('Called authenticatorGetAssertion');
@@ -574,7 +578,10 @@ export async function authenticatorGetAssertion(
     // Step 9
     await incrementSignatureCounter(selectedCredential);
 
+    // WebAuthn Level 3 inserts a new step here to pick a value for attestationFormat.
+
     // Step 10
+    // WebAuthn Level 3 changes this to include attested credential data iff attestationFormat is not none.
     const rpIdHash = await createHash(rpId);
     const flags = generateFlags(userVerified, false, Object.keys(processedExtensions).length > 0);
     const authenticatorData = generateAuthenticatorData(rpIdHash, flags, selectedCredential.otherUI.signatureCounter, undefined, processedExtensions);
@@ -594,6 +601,8 @@ export async function authenticatorGetAssertion(
         throw new UserCancelledError('Abort was signalled');
     }
 
+    // WebAuthn Level 3 inserts a new step here to create a new attestation object if the attestation format is not none.
+
     // Step 13
     const credentialId = allowCredentialDescriptorList === undefined
             || allowCredentialDescriptorList.length > 1
@@ -604,5 +613,9 @@ export async function authenticatorGetAssertion(
         authenticatorData: authenticatorData.buffer,
         signature,
         userHandle: selectedCredential.userHandle
+        // WebAuthn Level 3 adds the attestation object to the outputs if one was created.
     };
 }
+
+// WebAuthn Level 3 introduces a new silentCredentialDiscovery operation that's used to support conditional mediation.
+// https://www.w3.org/TR/webauthn-3/#silentcredentialdiscovery
