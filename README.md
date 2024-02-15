@@ -28,6 +28,7 @@ Limitations:
 - Enterprise attestation is not supported
 - No client or authenticator extensions are supported
 - There's no way to cancel an operation from the client's UI (because the client has no UI)
+- There's no way to use the client with any authenticator other than the built-in authenticator
 - Conditional mediation is not supported (WebAuthn Level 3)
 - Cross-origin `create()` and `get()` usage is not supported (WebAuthn Level 3)
 - There's no way to negotiate attestation format with an authenticator (WebAuthn Level 3)
