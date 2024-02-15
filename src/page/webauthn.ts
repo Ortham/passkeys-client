@@ -159,7 +159,7 @@ function getCredTypesAndPubKeyAlgs(params: PublicKeyCredentialCreationOptions['p
         ];
     }
 
-    const credTypesAndPubKeyAlgs = [];
+    const credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[] = [];
     for (const current of params) {
         if (current.type !== ALLOWED_CREDENTIAL_TYPE) {
             continue;
