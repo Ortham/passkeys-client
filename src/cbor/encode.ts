@@ -104,7 +104,7 @@ function encodeNumber(data: number): Uint8Array {
     }
 }
 
-function encodeArrayBuffer(data: ArrayBuffer | Uint8Array): Uint8Array {
+export function encodeArrayBuffer(data: ArrayBuffer | Uint8Array): Uint8Array {
     const lengthBuffer = encodeDataLength(data.byteLength);
     lengthBuffer[0] |= getTypeBits(CBOR_TYPE_BYTE_STRING);
 
@@ -160,7 +160,7 @@ export function encodeMap(map: Map<string | number, unknown>): Uint8Array {
     return concatArrays(lengthBuffer, ...arrays);
 }
 
-function encodeBoolean(data: boolean): Uint8Array {
+export function encodeBoolean(data: boolean): Uint8Array {
     const array = new Uint8Array(1);
     const encodedValue = data ? 21 : 20;
     array[0] = getTypeBits(CBOR_TYPE_FLOAT) | encodedValue;

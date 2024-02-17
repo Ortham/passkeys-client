@@ -1,11 +1,13 @@
 import { assert } from "../assert";
-import { isSelfAttestationUsed, parseAuthData, replaceIdentifyingInfo } from "../authData";
+import { isSelfAttestationUsed, parseAuthData, parseCreateCredentialAuthData, replaceIdentifyingInfo } from "../authData";
 import { InvalidStateError, UserCancelledError, authenticatorCancel, authenticatorGetAssertion, authenticatorMakeCredential, lookupCredentialsById } from "./authenticator";
 import { parseAttestationObject } from "../cbor/decode";
 import { COSE_ALG_ES256, COSE_ALG_RS256 } from "../cose";
 import { getEffectiveDomain, isRegistrableDomainSuffix } from "./domain";
 import { createHash, getArrayBuffer, toBase64Url } from "../util";
 import { AuthenticatorAssertion, CredTypeAndPubKeyAlg } from "../types";
+import { EXTENSION_ID_PRF, prfProcessAuthenticationInput, prfProcessAuthenticationOutput, prfProcessRegistrationInput, prfProcessRegistrationOutput } from "./prf";
+import { encodeMap } from "../cbor/encode";
 
 const ALLOWED_CREDENTIAL_TYPE = 'public-key';
 const AUTHENTICATOR_ID = "builtin";
@@ -184,10 +186,20 @@ function createClientDataJSON(type: string, challenge: BufferSource, origin: str
     });
 }
 
-function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, response: AuthenticatorResponse, clientExtensionResults: Record<string, unknown>): PublicKeyCredential {
-    // [[clientExtensionResults]] expects an ArrayBuffer value, and this returns the deserialisation of that, so just round-trip through JSON (which is required to be possible) to get it created with global.
-    const copiedResults = global.JSON.parse(global.JSON.stringify(clientExtensionResults));
+function jsonReplacer(_key: unknown, value: unknown): unknown {
+    if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+        return toBase64Url(value);
+    }
 
+    return value;
+}
+
+function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, response: AuthenticatorResponse, clientExtensionResults: Record<string, unknown>): PublicKeyCredential {
+    const base64UrlId = toBase64Url(id);
+    const copiedClientExtensionResults = global.structuredClone(clientExtensionResults);
+
+    // The replacer turns binary values into base64url strings, and that is not undone when the JSON is parsed.
+    const jsonSafeClientExtensionResults = global.JSON.parse(global.JSON.stringify(clientExtensionResults, jsonReplacer));
 
     let responseJSON: Record<string, unknown>;
     if (response instanceof AuthenticatorAttestationResponse) {
@@ -214,7 +226,7 @@ function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, r
 
     return global.Object.create(PublicKeyCredential.prototype, {
         id: {
-            value: toBase64Url(id)
+            value: base64UrlId
         },
         rawId: {
             value: id
@@ -229,15 +241,15 @@ function createPublicKeyCredential(global: typeof globalThis, id: ArrayBuffer, r
             value: null
         },
         getClientExtensionResults: {
-            value: () => copiedResults,
+            value: () => copiedClientExtensionResults,
         },
         toJSON: {
             value: () => ({
-                id: toBase64Url(id),
-                rawId: toBase64Url(id),
+                id: base64UrlId,
+                rawId: base64UrlId,
                 response: responseJSON,
                 authenticatorAttachment: null,
-                clientExtensionResults: copiedResults,
+                clientExtensionResults: jsonSafeClientExtensionResults,
                 type: 'public-key'
             }),
             // GitHub uses a polyfill that tries to replace toJSON's value.
@@ -250,7 +262,7 @@ async function invokeMakeCredential(
     options: PublicKeyCredentialCreationOptions,
     clientDataHash: ArrayBuffer,
     credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[],
-    authenticatorExtensions: Map<unknown, unknown>
+    authenticatorExtensions: Map<string, string>
 ): Promise<ArrayBuffer> {
     // Step 20.available.2
     if (options.authenticatorSelection) {
@@ -281,21 +293,39 @@ async function invokeMakeCredential(
     assert(options.rp.id !== undefined);
     const rp = { id: options.rp.id, ...options.rp };
 
-    return authenticatorMakeCredential(clientDataHash, rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensions, excludeCredentialDescriptorList);
+    const authenticatorExtensionsBuffer = encodeMap(authenticatorExtensions).buffer;
+
+    return authenticatorMakeCredential(clientDataHash, rp, options.user, requireResidentKey, requireUserVerification, credTypesAndPubKeyAlgs, enterpriseAttestationPossible, authenticatorExtensionsBuffer, excludeCredentialDescriptorList);
 }
 
-function handleMakeCredentialSuccess(
+async function getAuthenticatorExtensions(attestationObject: ArrayBuffer): Promise<Map<string, Uint8Array>> {
+    const { authData } = parseAttestationObject(new Uint8Array(attestationObject));
+    const { extensions } = await parseAuthData(authData);
+
+    return extensions ?? new Map();
+}
+
+async function handleMakeCredentialSuccess(
     options: PublicKeyCredentialCreationOptions,
     clientDataJSON: string,
-    clientExtensions: Record<string, unknown>,
+    clientExtensions: Map<string, unknown>,
     attestationObjectResult: ArrayBuffer
-): (global: typeof globalThis) => Promise<Credential> {
+): Promise<(global: typeof globalThis) => Promise<Credential>> {
+    const authenticatorExtensionsOutput = await getAuthenticatorExtensions(attestationObjectResult);
+
     // Step 20.success.2
+    const clientExtensionResults: Record<string, unknown> = {};
+    for (const extensionId of clientExtensions.keys()) {
+        if (extensionId === EXTENSION_ID_PRF) {
+            clientExtensionResults[extensionId] = prfProcessRegistrationOutput(authenticatorExtensionsOutput);
+        }
+    }
+
     const credentialCreationData = {
         attestationObjectResult: attestationObjectResult,
         clientDataJSONResult: clientDataJSON,
         attestationConveyancePreferenceOption: options.attestation,
-        clientExtensionResults: clientExtensions
+        clientExtensionResults
     };
 
     // Step 20.success.3
@@ -304,7 +334,7 @@ function handleMakeCredentialSuccess(
         // May need in step 3.1, will need in 3.3.
         const { fmt, attStmt, authData } = parseAttestationObject(new Uint8Array(credentialCreationData.attestationObjectResult));
         // Needed in step 3.3.
-        const { aaguid, credentialId, publicKey, publicKeyAlgorithm } = await parseAuthData(authData);
+        const { aaguid, credentialId, publicKey, publicKeyAlgorithm } = await parseCreateCredentialAuthData(authData);
 
         // Step 3.1
         const attrPref = credentialCreationData.attestationConveyancePreferenceOption;
@@ -411,10 +441,30 @@ export async function internalCreate(
         throw new DOMException('No supported algorithms were provided', 'NotSupportedError')
     }
 
-    // Steps 11 and 12 - No client extensions are supported.
-    const clientExtensions = {};
-    // No authenticator extensions are supported.
-    const authenticatorExtensions = new Map();
+    // Step 11
+    const clientExtensions = new Map();
+    const authenticatorExtensions = new Map<string, string>();
+
+    // Step 12
+    if (options.extensions !== undefined) {
+        for (const [extensionId, clientExtensionInput] of Object.entries(options.extensions)) {
+            // prf is the only supported extension.
+            if (extensionId === EXTENSION_ID_PRF) {
+                clientExtensions.set(extensionId, clientExtensionInput);
+
+                // Step 12.4
+                try {
+                    const { authenticatorExtensionId, authenticatorExtensionInput } = prfProcessRegistrationInput(clientExtensionInput);
+
+                    // Step 12.5
+                    authenticatorExtensions.set(authenticatorExtensionId, toBase64Url(authenticatorExtensionInput));
+                } catch (err) {
+                    console.error('Errored while processing prf client extension input', err);
+                    // Just continue looping.
+                }
+            }
+        }
+    }
 
     // Steps 13 and 14
     const clientDataJSON = createClientDataJSON('webauthn.create', options.challenge, origin, sameOriginWithAncestors);
@@ -488,9 +538,11 @@ async function invokeGetAssertion(
     options: PublicKeyCredentialRequestOptions,
     clientDataHash: ArrayBuffer,
     savedCredentialIds: Map<string, PublicKeyCredentialDescriptor>,
-    authenticatorExtensions: Map<unknown, unknown>
+    authenticatorExtensions: Map<string, string>
 ): Promise<AuthenticatorAssertion> {
     assert(options.rpId !== undefined);
+
+    const authenticatorExtensionsBuffer = encodeMap(authenticatorExtensions).buffer;
 
     // Step 17.available.1
     if (options.userVerification === 'required' && !AUTHENTICATOR_CAPABILITIES.supportsUserVerification) {
@@ -528,22 +580,33 @@ async function invokeGetAssertion(
 
         if (distinctTransports.size > 0) {
             // There's only one transport available to use.
-            return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
+            return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensionsBuffer, allowCredentialDescriptorList);
         } else {
             // There's only one transport available to use.
-            return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions, allowCredentialDescriptorList);
+            return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensionsBuffer, allowCredentialDescriptorList);
         }
     } else {
-        return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensions);
+        return authenticatorGetAssertion(options.rpId, clientDataHash, requireUserVerification, authenticatorExtensionsBuffer);
     }
 }
 
-function handleGetAssertionSuccess(
+async function handleGetAssertionSuccess(
     clientDataJSON: string,
-    clientExtensions: Record<string, unknown>,
+    clientExtensions: Map<string, unknown>,
     savedCredentialIds: Map<string, PublicKeyCredentialDescriptor>,
     authenticatorResult: AuthenticatorAssertion
-): (global: typeof globalThis) => Credential {
+): Promise<(global: typeof globalThis) => Credential> {
+    const { extensions } = await parseAuthData(new Uint8Array(authenticatorResult.authenticatorData));
+    const authenticatorExtensionsOutput: Map<string, Uint8Array> = extensions ?? new Map();
+
+    // Step 20.success.2
+    const clientExtensionResults: Record<string, unknown> = {};
+    for (const extensionId of clientExtensions.keys()) {
+        if (extensionId === EXTENSION_ID_PRF) {
+            clientExtensionResults[extensionId] = prfProcessAuthenticationOutput(authenticatorExtensionsOutput);
+        }
+    }
+
     // Step 17.success.2
     const assertionCreationData = {
         // If the saved credential ID is null, one will be provided in the result, they're mutually exclusive.
@@ -552,7 +615,7 @@ function handleGetAssertionSuccess(
         authenticatorDataResult: authenticatorResult.authenticatorData,
         signatureResult: authenticatorResult.signature,
         userHandleResult: authenticatorResult.userHandle,
-        clientExtensionResults: clientExtensions
+        clientExtensionResults
     };
 
     // Step 17.success.3
@@ -622,10 +685,32 @@ export async function internalDiscoverFromCredentialStore(
     // Step 6
     options.rpId = await validateRpId(options.rpId, effectiveDomain);
 
-    // Steps 7 and 8 - No client extensions are supported.
-    const clientExtensions = {};
-    // No authenticator extensions are supported.
+    // Steps 7
+    const clientExtensions = new Map();
     const authenticatorExtensions = new Map();
+
+    // Step 8
+    if (options.extensions !== undefined) {
+        for (const [extensionId, clientExtensionInput] of Object.entries(options.extensions)) {
+            // prf is the only supported extension.
+            if (extensionId === EXTENSION_ID_PRF) {
+                clientExtensions.set(extensionId, clientExtensionInput);
+
+                // Step 8.4
+                try {
+                    const result = await prfProcessAuthenticationInput(clientExtensionInput);
+
+                    // Step 8.5
+                    if ('authenticatorExtensionId' in result) {
+                        authenticatorExtensions.set(result.authenticatorExtensionId, toBase64Url(result.authenticatorExtensionInput));
+                    }
+                } catch (err) {
+                    console.error('Errored while processing prf client extension input', err);
+                    // Just continue looping.
+                }
+            }
+        }
+    }
 
     // Steps 9 and 10.
     const clientDataJSON = createClientDataJSON('webauthn.get', options.challenge, origin, sameOriginWithAncestors);

@@ -51,7 +51,7 @@ export async function authenticatorMakeCredential(
     requireUserVerification: boolean,
     credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[],
     enterpriseAttestationPossible: boolean,
-    extensions: Map<unknown, unknown>,
+    extensions: ArrayBuffer,
     excludeCredentialDescriptorList?: PublicKeyCredentialDescriptor[],
 ): Promise<ArrayBuffer> {
     return sendMessage<ArrayBuffer>('authenticatorMakeCredential', {
@@ -71,7 +71,7 @@ export async function authenticatorGetAssertion(
     rpId: string,
     hash: ArrayBuffer,
     requireUserVerification: boolean,
-    extensions: Map<unknown, unknown>,
+    extensions: ArrayBuffer,
     allowCredentialDescriptorList?: PublicKeyCredentialDescriptor[]
 ): Promise<AuthenticatorAssertion> {
     return sendMessage<AuthenticatorAssertion>('authenticatorGetAssertion', {

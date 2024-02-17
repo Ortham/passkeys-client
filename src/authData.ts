@@ -5,6 +5,7 @@ import { parseCBOR } from "./cbor/decode";
 import { coseToJwk, jwkAlgToCoseIdentifier } from "./cose";
 
 const FLAG_ATTESTED_CREDENTIAL_DATA_INCLUDED = 0b0100_0000;
+const FLAG_EXTENSION_DATA_INCLUDED = 0b1000_0000;
 const FLAGS_OFFSET = 32;
 const AAGUID_OFFSET = 37;
 const AAGUID_LENGTH = 16;
@@ -13,18 +14,26 @@ function isBitFlagSet(flags: number, flag: number) {
     return (flags & flag) === flag;
 };
 
-function assertAttestedCredentialDataIsPresent(authData: Uint8Array) {
+function isAttestedCredentialDataPresent(authData: Uint8Array): boolean {
     const flags = authData[FLAGS_OFFSET];
     assert(flags !== undefined);
-    assert(isBitFlagSet(flags, FLAG_ATTESTED_CREDENTIAL_DATA_INCLUDED), 'Attested credential data is not included in attestation object auth data');
+
+    return isBitFlagSet(flags, FLAG_ATTESTED_CREDENTIAL_DATA_INCLUDED);
 };
+
+function isExtensionDataPresent(authData: Uint8Array): boolean {
+    const flags = authData[FLAGS_OFFSET];
+    assert(flags !== undefined);
+
+    return isBitFlagSet(flags, FLAG_EXTENSION_DATA_INCLUDED);
+}
 
 function isZeroes(typedArray: Uint8Array) {
     return typedArray.every(b => b === 0);
 };
 
 function setAaguidToZero(authData: Uint8Array) {
-    assertAttestedCredentialDataIsPresent(authData);
+    assert(isAttestedCredentialDataPresent(authData), 'Attested credential data is not included in attestation object auth data');
 
     for (let i = AAGUID_OFFSET; i < AAGUID_OFFSET + AAGUID_LENGTH; i += 1) {
         authData[i] = 0;
@@ -88,25 +97,52 @@ async function encodeAsSpki(jwk: JsonWebKey) {
 }
 
 export async function parseAuthData(authData: Uint8Array) {
-    assertAttestedCredentialDataIsPresent(authData);
+    let aaguid;
+    let credentialId;
+    let publicKey;
+    let publicKeyAlgorithm;
+    let extensions;
+    if (isAttestedCredentialDataPresent(authData)) {
+        aaguid = authData.slice(AAGUID_OFFSET, AAGUID_OFFSET + AAGUID_LENGTH);
 
-    const aaguid = authData.slice(AAGUID_OFFSET, AAGUID_OFFSET + AAGUID_LENGTH);
+        const CREDENTIAL_ID_LENGTH_OFFSET = AAGUID_OFFSET + AAGUID_LENGTH;
+        // Stored as a big-endian uint16
+        const credentialIdLength = (authData[CREDENTIAL_ID_LENGTH_OFFSET]! << 8) | authData[CREDENTIAL_ID_LENGTH_OFFSET + 1]!;
 
-    const CREDENTIAL_ID_LENGTH_OFFSET = AAGUID_OFFSET + AAGUID_LENGTH;
-    // Stored as a big-endian uint16
-    const credentialIdLength = (authData[CREDENTIAL_ID_LENGTH_OFFSET]! << 8) | authData[CREDENTIAL_ID_LENGTH_OFFSET + 1]!;
+        const CREDENTIAL_ID_OFFSET = CREDENTIAL_ID_LENGTH_OFFSET + 2;
+        credentialId = authData.slice(CREDENTIAL_ID_OFFSET, CREDENTIAL_ID_OFFSET + credentialIdLength);
 
-    const CREDENTIAL_ID_OFFSET = CREDENTIAL_ID_LENGTH_OFFSET + 2;
-    const credentialId = authData.slice(CREDENTIAL_ID_OFFSET, CREDENTIAL_ID_OFFSET + credentialIdLength);
+        const values = parseCBOR(authData.slice(CREDENTIAL_ID_OFFSET + credentialIdLength));
+        assert(values.length > 0);
+        const coseKey = values[0];
+        assert(coseKey instanceof Map, "Parsed CBOR public key should be a Map");
 
-    const [publicKey,] = parseCBOR(authData.slice(CREDENTIAL_ID_OFFSET + credentialIdLength));
-    assert(publicKey instanceof Map, "Parsed CBOR public key should be a Map");
+        const jwk = coseToJwk(coseKey);
+        publicKey = await encodeAsSpki(jwk);
+        publicKeyAlgorithm = jwkAlgToCoseIdentifier(jwk.alg);
 
-    const jwk = coseToJwk(publicKey);
-    const spkiPublicKey = await encodeAsSpki(jwk);
-    const publicKeyAlgorithm = jwkAlgToCoseIdentifier(jwk.alg);
+        if (isExtensionDataPresent(authData)) {
+            extensions = values[1];
+            assert(extensions instanceof Map);
+        }
+    } else if (isExtensionDataPresent(authData)) {
+        const values = parseCBOR(authData.slice(AAGUID_OFFSET));
+        assert(values.length === 1);
+        extensions = values[0];
+        assert(extensions instanceof Map);
+    }
 
-    return { aaguid, credentialId, publicKey: spkiPublicKey, publicKeyAlgorithm };
+    return { aaguid, credentialId, publicKey, publicKeyAlgorithm, extensions };
+}
+
+export async function parseCreateCredentialAuthData(authData: Uint8Array) {
+    const { aaguid, credentialId, publicKey, publicKeyAlgorithm, extensions } = await parseAuthData(authData);
+    assert(aaguid !== undefined);
+    assert(credentialId !== undefined);
+    assert(publicKey !== undefined);
+    assert(publicKeyAlgorithm !== undefined);
+
+    return { aaguid, credentialId, publicKey, publicKeyAlgorithm, extensions };
 }
 
 export function isSelfAttestationUsed(fmt: string, attStmt: Map<unknown, unknown>, aaguid: Uint8Array) {

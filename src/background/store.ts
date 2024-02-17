@@ -148,3 +148,26 @@ export async function getCredentialOtherUI(credentialId: ArrayBuffer): Promise<P
 
     return results[key];
 }
+
+export type HmacSecretData = {
+    credRandomWithUV: ArrayBuffer;
+    credRandomWithoutUV: ArrayBuffer;
+};
+
+function getHmacSecretKey(credentialId: ArrayBuffer): string {
+    return `${CREDENTIALS_KEY}_hmacSecret_${toBase64Url(credentialId)}`;
+}
+
+export async function storeCredentialHmacSecretData(credentialId: ArrayBuffer, data: HmacSecretData): Promise<void> {
+    const key = getHmacSecretKey(credentialId);
+
+    return browser.storage.local.set({ [key]: data });
+}
+
+export async function getCredentialHmacSecretData(credentialId: ArrayBuffer): Promise<HmacSecretData | null> {
+    const key = getHmacSecretKey(credentialId);
+
+    const results = await browser.storage.local.get({ [key]: null });
+
+    return results[key];
+}

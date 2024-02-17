@@ -103,7 +103,7 @@ function decodeNegativeInt(buffer: Uint8Array): { value: bigint | number; end: b
     };
 }
 
-function decodeByteString(buffer: Uint8Array): { value: Uint8Array; end: bigint; } {
+export function decodeByteString(buffer: Uint8Array): { value: Uint8Array; end: bigint; } {
     assert(buffer.byteLength > 0, "Can't decode byte string from no data");
     assert(getType(buffer[0]!) === CBOR_TYPE_BYTE_STRING);
 
@@ -187,7 +187,7 @@ function ldexp(float: number, exp: number) {
     return float * Math.pow(2, exp);
 }
 
-function decodeFloat(buffer: Uint8Array): { value: boolean | null | undefined | number; end: bigint; } {
+export function decodeFloat(buffer: Uint8Array): { value: boolean | null | undefined | number; end: bigint; } {
     assert(buffer.byteLength > 0, "Can't decode float or simple type from no data");
     assert(getType(buffer[0]!) === CBOR_TYPE_FLOAT);
 

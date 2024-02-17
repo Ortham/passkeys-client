@@ -7,6 +7,7 @@ import { createHash, fromBase64Url, getArrayBuffer, getRandomBytes, toBase64Url 
 import { getAllStoredCredentials, getCredentialOtherUI, getEncryptionKey, getStoredCredentials, incrementSignatureCounter, storeCredential, storeCredentialOtherUI } from "./store";
 import { askUserForCreationConsent, askUserForSelection } from "./user";
 import { decodeMap } from "../cbor/decode";
+import { hmacSecretProcessGetAssertion, hmacSecretProcessMakeCredential } from "../page/prf";
 
 
 export class UserCancelledError extends Error {}
@@ -178,14 +179,15 @@ function generateFlags(
     return flags;
 }
 
-function generateAuthenticatorData(rpIdHash: ArrayBuffer, flags: number, signCount: number, attestedCredentialData: Uint8Array | undefined, extensions: Map<string, unknown>): Uint8Array {
+function generateAuthenticatorData(rpIdHash: ArrayBuffer, userVerified: boolean, signCount: number, attestedCredentialData: Uint8Array | undefined, extensions: Map<string, unknown>): Uint8Array {
+    const flags = generateFlags(userVerified, attestedCredentialData !== undefined, extensions.size > 0);
+
     const signCountArray = new ArrayBuffer(4);
     new DataView(signCountArray).setUint32(0, signCount, false);
 
-    const extensionsMap = new Map(Object.entries(extensions));
-    const extensionsArray = extensionsMap.size === 0
+    const extensionsArray = extensions.size === 0
         ? new Uint8Array(0)
-        : encodeMap(extensionsMap);
+        : encodeMap(extensions);
 
     if (attestedCredentialData !== undefined) {
         return concatArrays(
@@ -350,7 +352,7 @@ export async function authenticatorMakeCredential(
     requireUserVerification: boolean,
     credTypesAndPubKeyAlgs: CredTypeAndPubKeyAlg[],
     enterpriseAttestationPossible: boolean,
-    extensions: Map<unknown, unknown>,
+    extensions: ArrayBuffer,
     signal: AbortSignal,
     excludeCredentialDescriptorList?: PublicKeyCredentialDescriptor[],
 ): Promise<ArrayBuffer> {
@@ -479,9 +481,17 @@ export async function authenticatorMakeCredential(
 
     // Step 9
     const processedExtensions = new Map();
-    // No authenticator extensions are supported.
-    for (const _extension of extensions) {
-        continue;
+    for (const [extensionId, extensionInput] of decodeMap(new Uint8Array(extensions)).value) {
+        // The hmac-secret extension is used by the prf client extension.
+        if (extensionId === 'hmac-secret') {
+            assert(typeof extensionInput === 'string');
+
+            const result = await hmacSecretProcessMakeCredential(extensionInput, credentialSource.id);
+
+            if (result !== undefined) {
+                processedExtensions.set(extensionId, result);
+            }
+        }
     }
 
     // Step 10 was already done above when creating the credential.
@@ -491,8 +501,7 @@ export async function authenticatorMakeCredential(
 
     // Step 12
     const rpIdHash = await createHash(rpEntity.id);
-    const flags = generateFlags(userVerified, true, Object.keys(processedExtensions).length > 0);
-    const authenticatorData = generateAuthenticatorData(rpIdHash, flags, credentialSource.otherUI.signatureCounter, attestedCredentialData, processedExtensions);
+    const authenticatorData = generateAuthenticatorData(rpIdHash, userVerified, credentialSource.otherUI.signatureCounter, attestedCredentialData, processedExtensions);
 
     // Step 13
     const attestationObject = await generateAttestationObject(privateKey, authenticatorData, hash, enterpriseAttestationPossible);
@@ -509,7 +518,7 @@ export async function authenticatorGetAssertion(
     rpId: string,
     hash: ArrayBuffer,
     requireUserVerification: boolean,
-    extensions: Map<unknown, unknown>,
+    extensions: ArrayBuffer,
     signal: AbortSignal,
     allowCredentialDescriptorList?: PublicKeyCredentialDescriptor[]
 ): Promise<AuthenticatorAssertion> {
@@ -562,8 +571,17 @@ export async function authenticatorGetAssertion(
     // Step 8
     const processedExtensions = new Map();
     // No authenticator extensions are supported.
-    for (const _extension of extensions) {
-        continue;
+    for (const [extensionId, extensionInput] of decodeMap(new Uint8Array(extensions)).value) {
+        // The hmac-secret extension is used by the prf client extension.
+        if (extensionId === 'hmac-secret') {
+            assert(typeof extensionInput === 'string');
+
+            const result = await hmacSecretProcessGetAssertion(extensionInput, selectedCredential.id);
+
+            if (result !== undefined) {
+                processedExtensions.set(extensionId, result);
+            }
+        }
     }
 
     // Check for abort just before writing changes to storage.
@@ -576,8 +594,7 @@ export async function authenticatorGetAssertion(
 
     // Step 10
     const rpIdHash = await createHash(rpId);
-    const flags = generateFlags(userVerified, false, Object.keys(processedExtensions).length > 0);
-    const authenticatorData = generateAuthenticatorData(rpIdHash, flags, selectedCredential.otherUI.signatureCounter, undefined, processedExtensions);
+    const authenticatorData = generateAuthenticatorData(rpIdHash, userVerified, selectedCredential.otherUI.signatureCounter, undefined, processedExtensions);
 
     // Step 11
     let signature: ArrayBuffer;
